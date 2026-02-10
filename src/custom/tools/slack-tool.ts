@@ -3,6 +3,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { stringEnum } from "../../agents/schema/typebox.js";
 import { createSlackWebClient } from "../../slack/client.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveSlackBotToken } from "../../slack/token.js";
@@ -10,9 +11,9 @@ import { parseSlackTarget } from "../../slack/targets.js";
 import { readSlackMessages, getSlackMemberInfo } from "../../slack/actions.js";
 import type { SlackFile } from "../../slack/types.js";
 import { resolveSlackMedia } from "../../slack/monitor/media.js";
-import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { jsonResult, readNumberParam, readStringParam } from "../../agents/tools/common.js";
 
-import type { AnyAgentTool } from "./common.js";
+import type { AnyAgentTool } from "../../agents/tools/common.js";
 
 type SlackToolOptions = {
   config?: OpenClawConfig;
@@ -21,16 +22,10 @@ type SlackToolOptions = {
   currentThreadTs?: string;
 };
 
+const SLACK_TOOL_ACTIONS = ["read", "user-info", "download-file", "upload-file"] as const;
+
 const SlackToolSchema = Type.Object({
-  action: Type.Union(
-    [
-      Type.Literal("read"),
-      Type.Literal("user-info"),
-      Type.Literal("download-file"),
-      Type.Literal("upload-file"),
-    ],
-    { description: "Slack action to perform." },
-  ),
+  action: stringEnum(SLACK_TOOL_ACTIONS, { description: "Slack action to perform." }),
 
   accountId: Type.Optional(Type.String({ description: "Slack account id override (multi-account)." })),
 

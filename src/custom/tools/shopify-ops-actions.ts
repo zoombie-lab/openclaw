@@ -2,8 +2,8 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 
-import { stringEnum } from "../schema/typebox.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import { stringEnum } from "../../agents/schema/typebox.js";
+import { type AnyAgentTool, jsonResult, readStringParam } from "../../agents/tools/common.js";
 
 const SHOPIFY_OPS_ACTIONS = [
   "sales-analytics",
@@ -52,7 +52,7 @@ export async function handleShopifyOpsAction(
     .update(`${ts}.${nonce}.${body}`)
     .digest("hex");
 
-  const endpoint = `${baseUrl.replace(/\\+$/g, "")}/api/agent/v1/metrics`;
+  const endpoint = `${baseUrl.replace(/\/+$/g, "")}/api/agent/v1/metrics`;
   const res = await fetch(endpoint, {
     method: "POST",
     headers: {

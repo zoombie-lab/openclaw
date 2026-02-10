@@ -18,8 +18,8 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
-import { createSlackTool } from "./tools/slack-tool.js";
-import { createShopifyOpsTool } from "./tools/shopify-ops-actions.js";
+import { createSlackTool } from "../custom/tools/slack-tool.js";
+import { createShopifyOpsTool } from "../custom/tools/shopify-ops-actions.js";
 
 export function createOpenClawTools(options?: {
   sandboxBrowserBridgeUrl?: string;
