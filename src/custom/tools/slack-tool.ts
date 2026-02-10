@@ -132,6 +132,7 @@ async function resolveSlackUploadChannelId(params: {
 
 export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
   return {
+    label: "Slack",
     name: "slack",
     description:
       "Slack utilities for on-demand context fetch (read recent messages / thread replies) and file upload/download. Prefer using this when you need more Slack context than the mention/DM event provides.",
