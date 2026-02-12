@@ -7,6 +7,7 @@ import {
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
+  type ResolvedSlackAccount,
 } from "../../../slack/accounts.js";
 import { resolveSlackChannelAllowlist } from "../../../slack/resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../../../slack/resolve-users.js";
@@ -15,6 +16,21 @@ import { promptChannelAccessConfig } from "./channel-access.js";
 import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "slack" as const;
+
+function requiresSlackAppToken(account: ResolvedSlackAccount): boolean {
+  return (account.config.mode ?? "socket") !== "http";
+}
+
+function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
+  const hasBotToken = Boolean(account.botToken?.trim());
+  if (!hasBotToken) {
+    return false;
+  }
+  if (!requiresSlackAppToken(account)) {
+    return Boolean(account.config.signingSecret?.trim());
+  }
+  return Boolean(account.appToken?.trim());
+}
 
 function setSlackDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
   const allowFrom =
@@ -325,7 +341,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
   getStatus: async ({ cfg }) => {
     const configured = listSlackAccountIds(cfg).some((accountId) => {
       const account = resolveSlackAccount({ cfg, accountId });
-      return Boolean(account.botToken && account.appToken);
+      return isSlackAccountConfigured(account);
     });
     return {
       channel,
@@ -355,14 +371,15 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
       cfg: next,
       accountId: slackAccountId,
     });
-    const accountConfigured = Boolean(resolvedAccount.botToken && resolvedAccount.appToken);
+    const accountConfigured = isSlackAccountConfigured(resolvedAccount);
+    const needsAppToken = requiresSlackAppToken(resolvedAccount);
     const allowEnv = slackAccountId === DEFAULT_ACCOUNT_ID;
     const canUseEnv =
       allowEnv &&
       Boolean(process.env.SLACK_BOT_TOKEN?.trim()) &&
-      Boolean(process.env.SLACK_APP_TOKEN?.trim());
+      (!needsAppToken || Boolean(process.env.SLACK_APP_TOKEN?.trim()));
     const hasConfigTokens = Boolean(
-      resolvedAccount.config.botToken && resolvedAccount.config.appToken,
+      resolvedAccount.config.botToken && (!needsAppToken || resolvedAccount.config.appToken),
     );
 
     let botToken: string | null = null;
@@ -373,12 +390,14 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: "OpenClaw",
       }),
     ).trim();
-    if (!accountConfigured) {
+    if (!accountConfigured && needsAppToken) {
       await noteSlackTokenHelp(prompter, slackBotName);
     }
-    if (canUseEnv && (!resolvedAccount.config.botToken || !resolvedAccount.config.appToken)) {
+    if (canUseEnv && !hasConfigTokens) {
       const keepEnv = await prompter.confirm({
-        message: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
+        message: needsAppToken
+          ? "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?"
+          : "SLACK_BOT_TOKEN detected. Use env vars?",
         initialValue: true,
       });
       if (keepEnv) {
@@ -396,12 +415,14 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
             validate: (value) => (value?.trim() ? undefined : "Required"),
           }),
         ).trim();
-        appToken = String(
-          await prompter.text({
-            message: "Enter Slack app token (xapp-...)",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
+        if (needsAppToken) {
+          appToken = String(
+            await prompter.text({
+              message: "Enter Slack app token (xapp-...)",
+              validate: (value) => (value?.trim() ? undefined : "Required"),
+            }),
+          ).trim();
+        }
       }
     } else if (hasConfigTokens) {
       const keep = await prompter.confirm({
@@ -415,12 +436,14 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
             validate: (value) => (value?.trim() ? undefined : "Required"),
           }),
         ).trim();
-        appToken = String(
-          await prompter.text({
-            message: "Enter Slack app token (xapp-...)",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
+        if (needsAppToken) {
+          appToken = String(
+            await prompter.text({
+              message: "Enter Slack app token (xapp-...)",
+              validate: (value) => (value?.trim() ? undefined : "Required"),
+            }),
+          ).trim();
+        }
       }
     } else {
       botToken = String(
@@ -429,15 +452,17 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
           validate: (value) => (value?.trim() ? undefined : "Required"),
         }),
       ).trim();
-      appToken = String(
-        await prompter.text({
-          message: "Enter Slack app token (xapp-...)",
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        }),
-      ).trim();
+      if (needsAppToken) {
+        appToken = String(
+          await prompter.text({
+            message: "Enter Slack app token (xapp-...)",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+      }
     }
 
-    if (botToken && appToken) {
+    if (botToken && (!needsAppToken || appToken)) {
       if (slackAccountId === DEFAULT_ACCOUNT_ID) {
         next = {
           ...next,
@@ -447,7 +472,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
               ...next.channels?.slack,
               enabled: true,
               botToken,
-              appToken,
+              ...(needsAppToken ? { appToken: appToken as string } : {}),
             },
           },
         };
@@ -465,7 +490,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
                   ...next.channels?.slack?.accounts?.[slackAccountId],
                   enabled: next.channels?.slack?.accounts?.[slackAccountId]?.enabled ?? true,
                   botToken,
-                  appToken,
+                  ...(needsAppToken ? { appToken: appToken as string } : {}),
                 },
               },
             },

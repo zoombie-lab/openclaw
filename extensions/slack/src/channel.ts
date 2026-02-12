@@ -51,6 +51,18 @@ function getTokenForOperation(
   return botToken ?? userToken;
 }
 
+function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
+  const slackMode = account.config.mode ?? "socket";
+  const hasBotToken = Boolean(account.botToken?.trim());
+  if (!hasBotToken) {
+    return false;
+  }
+  if (slackMode === "http") {
+    return Boolean(account.config.signingSecret?.trim());
+  }
+  return Boolean(account.appToken?.trim());
+}
+
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
   meta: {
@@ -116,12 +128,12 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         accountId,
         clearBaseFields: ["botToken", "appToken", "name"],
       }),
-    isConfigured: (account) => Boolean(account.botToken && account.appToken),
+    isConfigured: (account) => isSlackAccountConfigured(account),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.botToken && account.appToken),
+      configured: isSlackAccountConfigured(account),
       botTokenSource: account.botTokenSource,
       appTokenSource: account.appTokenSource,
     }),
@@ -444,12 +456,16 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         accountId,
         name,
       }),
-    validateInput: ({ accountId, input }) => {
+    validateInput: ({ cfg, accountId, input }) => {
       if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
         return "Slack env tokens can only be used for the default account.";
       }
-      if (!input.useEnv && (!input.botToken || !input.appToken)) {
-        return "Slack requires --bot-token and --app-token (or --use-env).";
+      const account = resolveSlackAccount({ cfg, accountId });
+      const needsAppToken = (account.config.mode ?? "socket") !== "http";
+      if (!input.useEnv && (!input.botToken || (needsAppToken && !input.appToken))) {
+        return needsAppToken
+          ? "Slack requires --bot-token and --app-token (or --use-env)."
+          : "Slack HTTP mode requires --bot-token (or --use-env).";
       }
       return null;
     },
@@ -565,7 +581,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       return await getSlackRuntime().channel.slack.probeSlack(token, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const configured = Boolean(account.botToken && account.appToken);
+      const configured = isSlackAccountConfigured(account);
       return {
         accountId: account.accountId,
         name: account.name,
