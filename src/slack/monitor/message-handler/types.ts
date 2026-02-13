@@ -1,4 +1,5 @@
 import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
+import type { ReplyToMode } from "../../../config/types.js";
 import type { ResolvedAgentRoute } from "../../../routing/resolve-route.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
@@ -17,6 +18,7 @@ export type PreparedSlackMessage = {
   isRoomish: boolean;
   historyKey: string;
   preview: string;
+  replyToMode: ReplyToMode;
   ackReactionMessageTs?: string;
   ackReactionValue: string;
   ackReactionPromise: Promise<boolean> | null;

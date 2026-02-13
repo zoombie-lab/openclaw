@@ -1,5 +1,4 @@
 import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
-import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { PreparedSlackMessage } from "./types.js";
 import { resolveAckReaction } from "../../../agents/identity.js";
@@ -37,6 +36,7 @@ import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../../security/channel-metadata.js";
+import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
@@ -194,7 +194,13 @@ export async function prepareSlackMessage(params: {
   });
 
   const baseSessionKey = route.sessionKey;
-  const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
+  const replyToChatType = isDirectMessage
+    ? "direct"
+    : resolvedChannelType === "channel"
+      ? "channel"
+      : "group";
+  const replyToMode = resolveSlackReplyToMode(account, replyToChatType);
+  const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
   const threadKeys = resolveThreadSessionKeys({
@@ -233,6 +239,7 @@ export async function prepareSlackMessage(params: {
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
   const senderName =
     sender?.name ?? message.username?.trim() ?? message.user ?? message.bot_id ?? "unknown";
+  const senderTimezone = sender?.timezone;
 
   const channelUserAuthorized = isRoom
     ? resolveSlackUserAllowed({
@@ -512,6 +519,7 @@ export async function prepareSlackMessage(params: {
     UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
     SenderName: senderName,
     SenderId: senderId,
+    SenderTimezone: senderTimezone,
     Provider: "slack" as const,
     Surface: "slack" as const,
     MessageSid: message.ts,
@@ -576,6 +584,7 @@ export async function prepareSlackMessage(params: {
     isRoomish,
     historyKey,
     preview,
+    replyToMode,
     ackReactionMessageTs,
     ackReactionValue,
     ackReactionPromise,

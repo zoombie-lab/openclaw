@@ -37,7 +37,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const { statusThreadTs } = resolveSlackThreadTargets({
     message,
-    replyToMode: ctx.replyToMode,
+    replyToMode: prepared.replyToMode,
   });
 
   const messageTs = message.ts ?? message.event_ts;
@@ -48,7 +48,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // mark this to ensure only the first reply is threaded.
   const hasRepliedRef = { value: false };
   const replyPlan = createSlackReplyDeliveryPlan({
-    replyToMode: ctx.replyToMode,
+    replyToMode: prepared.replyToMode,
     incomingThreadTs,
     messageTs,
     hasRepliedRef,
