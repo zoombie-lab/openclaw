@@ -44,7 +44,11 @@ import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-li
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
-import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
+import {
+  hasSlackThreadParticipant,
+  resolveSlackMedia,
+  resolveSlackThreadStarter,
+} from "../media.js";
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
@@ -299,6 +303,24 @@ export async function prepareSlackMessage(params: {
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;
 
+  let botParticipatedInThread = false;
+  if (
+    isRoom &&
+    Boolean(shouldRequireMention) &&
+    isThreadReply &&
+    threadTs &&
+    ctx.botUserId &&
+    !wasMentioned &&
+    !implicitMention
+  ) {
+    botParticipatedInThread = await hasSlackThreadParticipant({
+      channelId: message.channel,
+      threadTs,
+      userId: ctx.botUserId,
+      client: ctx.app.client,
+    });
+  }
+
   // Allow "control commands" to bypass mention gating if sender is authorized.
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
   const mentionGate = resolveMentionGatingWithBypass({
@@ -306,7 +328,7 @@ export async function prepareSlackMessage(params: {
     requireMention: Boolean(shouldRequireMention),
     canDetectMention,
     wasMentioned,
-    implicitMention,
+    implicitMention: implicitMention || botParticipatedInThread,
     hasAnyMention,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,

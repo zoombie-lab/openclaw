@@ -171,6 +171,12 @@ export type SlackThreadStarter = {
 };
 
 const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarter>();
+const THREAD_PARTICIPANTS_CACHE = new Map<string, Set<string>>();
+
+function normalizeSlackUserId(value: unknown): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed || null;
+}
 
 export async function resolveSlackThreadStarter(params: {
   channelId: string;
@@ -204,5 +210,53 @@ export async function resolveSlackThreadStarter(params: {
     return starter;
   } catch {
     return null;
+  }
+}
+
+export async function hasSlackThreadParticipant(params: {
+  channelId: string;
+  threadTs: string;
+  userId: string;
+  client: SlackWebClient;
+}): Promise<boolean> {
+  const normalizedUserId = normalizeSlackUserId(params.userId);
+  if (!normalizedUserId) {
+    return false;
+  }
+
+  const cacheKey = `${params.channelId}:${params.threadTs}`;
+  const cached = THREAD_PARTICIPANTS_CACHE.get(cacheKey);
+  if (cached) {
+    return cached.has(normalizedUserId);
+  }
+
+  try {
+    const response = (await params.client.conversations.replies({
+      channel: params.channelId,
+      ts: params.threadTs,
+      limit: 1,
+      inclusive: true,
+    })) as {
+      messages?: Array<{
+        user?: string;
+        reply_users?: Array<string | null | undefined>;
+      }>;
+    };
+    const root = response?.messages?.[0];
+    const participants = new Set<string>();
+    const rootUserId = normalizeSlackUserId(root?.user);
+    if (rootUserId) {
+      participants.add(rootUserId);
+    }
+    for (const id of root?.reply_users ?? []) {
+      const normalizedId = normalizeSlackUserId(id);
+      if (normalizedId) {
+        participants.add(normalizedId);
+      }
+    }
+    THREAD_PARTICIPANTS_CACHE.set(cacheKey, participants);
+    return participants.has(normalizedUserId);
+  } catch {
+    return false;
   }
 }
