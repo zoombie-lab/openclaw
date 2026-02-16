@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -224,6 +225,85 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   return delivery;
 }
 
+function isValidIanaTimezone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveSessionTimezoneFromSessionKey(agentSessionKey?: string): string | null {
+  const sessionKey = agentSessionKey?.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  try {
+    const cfg = loadConfig();
+    const { mainKey, alias } = resolveMainSessionAlias(cfg);
+    const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+    const parsed = parseAgentSessionKey(resolvedKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: parsed?.agentId });
+    const store = loadSessionStore(storePath);
+    const rawTz = store[resolvedKey]?.origin?.senderTimezone;
+    if (typeof rawTz !== "string") {
+      return null;
+    }
+    const tz = rawTz.trim();
+    return tz && isValidIanaTimezone(tz) ? tz : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasExplicitMainSessionTarget(params: Record<string, unknown>): boolean {
+  const topLevel = params.sessionTarget;
+  if (typeof topLevel === "string" && topLevel.trim().toLowerCase() === "main") {
+    return true;
+  }
+  const rawJob = isRecord(params.job) ? params.job : null;
+  const jobTarget = rawJob?.sessionTarget;
+  return typeof jobTarget === "string" && jobTarget.trim().toLowerCase() === "main";
+}
+
+function promoteImplicitSystemEventReminderToAgentTurn(
+  job: unknown,
+  opts: { explicitMain: boolean },
+) {
+  if (!isRecord(job) || opts.explicitMain) {
+    return;
+  }
+  if (job.sessionTarget !== "main") {
+    return;
+  }
+  const payload = isRecord(job.payload) ? job.payload : null;
+  if (!payload || payload.kind !== "systemEvent") {
+    return;
+  }
+  const text = typeof payload.text === "string" ? payload.text.trim() : "";
+  if (!text) {
+    return;
+  }
+  job.payload = { kind: "agentTurn", message: text };
+  job.sessionTarget = "isolated";
+}
+
+function applyDefaultCronTimezone(job: unknown, timezone: string | null) {
+  if (!timezone || !isRecord(job)) {
+    return;
+  }
+  const schedule = isRecord(job.schedule) ? job.schedule : null;
+  if (!schedule) {
+    return;
+  }
+  const kind = typeof schedule.kind === "string" ? schedule.kind : "";
+  const hasTz = typeof schedule.tz === "string" && schedule.tz.trim().length > 0;
+  if (kind === "cron" && !hasTz) {
+    schedule.tz = timezone;
+  }
+}
+
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   return {
     label: "Cron",
@@ -355,6 +435,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
+          const explicitMain = hasExplicitMainSessionTarget(params);
           const job = normalizeCronJobCreate(params.job) ?? params.job;
           if (job && typeof job === "object" && !("agentId" in job)) {
             const cfg = loadConfig();
@@ -364,6 +445,18 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             if (agentId) {
               (job as { agentId?: string }).agentId = agentId;
             }
+          }
+          const inferredDelivery = opts?.agentSessionKey
+            ? inferDeliveryFromSessionKey(opts.agentSessionKey)
+            : null;
+          if (opts?.agentSessionKey) {
+            if (inferredDelivery) {
+              promoteImplicitSystemEventReminderToAgentTurn(job, { explicitMain });
+            }
+            applyDefaultCronTimezone(
+              job,
+              resolveSessionTimezoneFromSessionKey(opts.agentSessionKey),
+            );
           }
 
           if (
@@ -383,7 +476,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const shouldInfer =
               (deliveryValue == null || delivery) && mode !== "none" && !hasTarget;
             if (shouldInfer) {
-              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
+              const inferred = inferredDelivery;
               if (inferred) {
                 (job as { delivery?: unknown }).delivery = {
                   ...delivery,

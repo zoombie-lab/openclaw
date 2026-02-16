@@ -7,6 +7,7 @@ import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -298,6 +299,27 @@ export async function runEmbeddedAttempt(
       sessionKey: params.sessionKey,
       config: params.config,
     });
+    const sessionTimezone =
+      params.config && params.sessionKey
+        ? resolveSessionSenderTimezone({
+            config: params.config,
+            sessionKey: params.sessionKey,
+            agentId: sessionAgentId,
+          })
+        : undefined;
+    const configForPrompt =
+      params.config && sessionTimezone
+        ? {
+            ...params.config,
+            agents: {
+              ...params.config.agents,
+              defaults: {
+                ...params.config.agents?.defaults,
+                userTimezone: sessionTimezone,
+              },
+            },
+          }
+        : params.config;
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
     // Resolve channel-specific message actions for system prompt
@@ -321,7 +343,7 @@ export async function runEmbeddedAttempt(
     });
     const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
     const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
-      config: params.config,
+      config: configForPrompt,
       agentId: sessionAgentId,
       workspaceDir: effectiveWorkspace,
       cwd: process.cwd(),
@@ -924,5 +946,28 @@ export async function runEmbeddedAttempt(
   } finally {
     restoreSkillEnv?.();
     process.chdir(prevCwd);
+  }
+}
+
+function resolveSessionSenderTimezone(params: {
+  config: NonNullable<EmbeddedRunAttemptParams["config"]>;
+  sessionKey: string;
+  agentId?: string;
+}): string | undefined {
+  const key = params.sessionKey.trim();
+  if (!key) {
+    return undefined;
+  }
+  try {
+    const storePath = resolveStorePath(params.config.session?.store, { agentId: params.agentId });
+    const store = loadSessionStore(storePath);
+    const timezone = store[key]?.origin?.senderTimezone?.trim();
+    if (!timezone) {
+      return undefined;
+    }
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch {
+    return undefined;
   }
 }

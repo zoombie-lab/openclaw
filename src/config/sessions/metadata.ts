@@ -39,6 +39,9 @@ const mergeOrigin = (
   if (next?.threadId != null && next.threadId !== "") {
     merged.threadId = next.threadId;
   }
+  if (next?.senderTimezone) {
+    merged.senderTimezone = next.senderTimezone;
+  }
   return Object.keys(merged).length > 0 ? merged : undefined;
 };
 
@@ -56,6 +59,7 @@ export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined 
     (typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To)?.trim() ?? undefined;
   const accountId = ctx.AccountId?.trim();
   const threadId = ctx.MessageThreadId ?? undefined;
+  const senderTimezone = ctx.SenderTimezone?.trim();
 
   const origin: SessionOrigin = {};
   if (label) {
@@ -81,6 +85,9 @@ export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined 
   }
   if (threadId != null && threadId !== "") {
     origin.threadId = threadId;
+  }
+  if (senderTimezone) {
+    origin.senderTimezone = senderTimezone;
   }
 
   return Object.keys(origin).length > 0 ? origin : undefined;

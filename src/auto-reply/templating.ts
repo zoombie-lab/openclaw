@@ -95,6 +95,7 @@ export type MsgContext = {
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
+  SenderTimezone?: string;
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;

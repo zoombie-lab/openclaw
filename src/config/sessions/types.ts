@@ -20,6 +20,7 @@ export type SessionOrigin = {
   to?: string;
   accountId?: string;
   threadId?: string | number;
+  senderTimezone?: string;
 };
 
 export type SessionEntry = {

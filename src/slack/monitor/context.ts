@@ -113,7 +113,7 @@ export type SlackMonitorContext = {
     topic?: string;
     purpose?: string;
   }>;
-  resolveUserName: (userId: string) => Promise<{ name?: string }>;
+  resolveUserName: (userId: string) => Promise<{ name?: string; timezone?: string }>;
   setSlackThreadStatus: (params: {
     channelId: string;
     threadTs?: string;
@@ -168,7 +168,7 @@ export function createSlackMonitorContext(params: {
       purpose?: string;
     }
   >();
-  const userCache = new Map<string, { name?: string }>();
+  const userCache = new Map<string, { name?: string; timezone?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
 
   const allowFrom = normalizeAllowList(params.allowFrom);
@@ -250,7 +250,9 @@ export function createSlackMonitorContext(params: {
       });
       const profile = info.user?.profile;
       const name = profile?.display_name || profile?.real_name || info.user?.name || undefined;
-      const entry = { name };
+      const timezone =
+        typeof info.user?.tz === "string" && info.user.tz.trim() ? info.user.tz.trim() : undefined;
+      const entry = { name, timezone };
       userCache.set(userId, entry);
       return entry;
     } catch {

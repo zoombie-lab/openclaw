@@ -1,9 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn();
+const loadSessionStoreMock = vi.fn();
+const resolveStorePathMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+
+vi.mock("../../config/sessions.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
+    "../../config/sessions.js",
+  );
+  return {
+    ...actual,
+    loadSessionStore: (...args: unknown[]) => loadSessionStoreMock(...args),
+    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
+  };
+});
 
 vi.mock("../agent-scope.js", () => ({
   resolveSessionAgentId: () => "agent-123",
@@ -15,6 +28,10 @@ describe("cron tool", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({ ok: true });
+    loadSessionStoreMock.mockReset();
+    loadSessionStoreMock.mockReturnValue({});
+    resolveStorePathMock.mockReset();
+    resolveStorePathMock.mockReturnValue("/tmp/openclaw-sessions.json");
   });
 
   it.each([
@@ -442,5 +459,92 @@ describe("cron tool", () => {
       params?: { delivery?: { mode?: string; channel?: string; to?: string } };
     };
     expect(call?.params?.delivery).toEqual({ mode: "none" });
+  });
+
+  it("promotes implicit systemEvent reminders to isolated agentTurn for proactive delivery", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:freddy:slack:direct:U12345" });
+    await tool.execute("call-promote", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "systemEvent", text: "Remind me to check inventory." },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: {
+        sessionTarget?: string;
+        payload?: { kind?: string; message?: string; text?: string };
+        delivery?: { mode?: string; channel?: string; to?: string };
+      };
+    };
+    expect(call?.params?.sessionTarget).toBe("isolated");
+    expect(call?.params?.payload?.kind).toBe("agentTurn");
+    expect(call?.params?.payload?.message).toBe("Remind me to check inventory.");
+    expect(call?.params?.payload?.text).toBeUndefined();
+    expect(call?.params?.delivery).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "U12345",
+    });
+  });
+
+  it("keeps explicit main-session systemEvent jobs unchanged", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:freddy:slack:direct:U12345" });
+    await tool.execute("call-explicit-main", {
+      action: "add",
+      job: {
+        name: "internal-queue",
+        sessionTarget: "main",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "systemEvent", text: "Internal wake event" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: {
+        sessionTarget?: string;
+        payload?: { kind?: string; text?: string };
+        delivery?: unknown;
+      };
+    };
+    expect(call?.params?.sessionTarget).toBe("main");
+    expect(call?.params?.payload).toEqual({ kind: "systemEvent", text: "Internal wake event" });
+    expect(call?.params?.delivery).toBeUndefined();
+  });
+
+  it("defaults cron schedule timezone from session sender timezone", async () => {
+    loadSessionStoreMock.mockReturnValue({
+      "agent:freddy:slack:direct:U12345": {
+        sessionId: "sid",
+        updatedAt: 1,
+        origin: { senderTimezone: "America/New_York" },
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:freddy:slack:direct:U12345" });
+    await tool.execute("call-tz-default", {
+      action: "add",
+      job: {
+        name: "daily-reminder",
+        schedule: { kind: "cron", expr: "0 15 * * *" },
+        payload: { kind: "agentTurn", message: "Send daily reminder" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { schedule?: { kind?: string; expr?: string; tz?: string } };
+    };
+    expect(call?.params?.schedule).toEqual({
+      kind: "cron",
+      expr: "0 15 * * *",
+      tz: "America/New_York",
+    });
   });
 });
