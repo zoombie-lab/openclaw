@@ -170,12 +170,40 @@ export type SlackThreadStarter = {
   files?: SlackFile[];
 };
 
+export type SlackThreadMessage = {
+  text?: string;
+  userId?: string;
+  botId?: string;
+  username?: string;
+  ts?: string;
+  files?: SlackFile[];
+};
+
 const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarter>();
 const THREAD_PARTICIPANTS_CACHE = new Map<string, Set<string>>();
+const THREAD_CONTEXT_PAGE_SIZE = 200;
+const THREAD_CONTEXT_MAX_MESSAGES = 2000;
 
 function normalizeSlackUserId(value: unknown): string | null {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return trimmed || null;
+}
+
+function normalizeSlackTs(value: unknown): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) {
+    return null;
+  }
+  const asNumber = Number(trimmed);
+  return Number.isFinite(asNumber) ? trimmed : null;
+}
+
+function tsToNumber(value?: string): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export async function resolveSlackThreadStarter(params: {
@@ -259,4 +287,79 @@ export async function hasSlackThreadParticipant(params: {
   } catch {
     return false;
   }
+}
+
+export async function resolveSlackThreadMessages(params: {
+  channelId: string;
+  threadTs: string;
+  client: SlackWebClient;
+  beforeTs?: string;
+}): Promise<SlackThreadMessage[]> {
+  const beforeTsNumber = tsToNumber(params.beforeTs);
+  const collected = new Map<string, SlackThreadMessage>();
+  let cursor: string | undefined;
+  let truncated = false;
+
+  while (true) {
+    try {
+      const response = (await params.client.conversations.replies({
+        channel: params.channelId,
+        ts: params.threadTs,
+        limit: THREAD_CONTEXT_PAGE_SIZE,
+        cursor,
+      })) as {
+        has_more?: boolean;
+        response_metadata?: { next_cursor?: string };
+        messages?: Array<{
+          text?: string;
+          user?: string;
+          bot_id?: string;
+          username?: string;
+          ts?: string;
+          files?: SlackFile[];
+        }>;
+      };
+      for (const message of response.messages ?? []) {
+        const ts = normalizeSlackTs(message.ts);
+        if (!ts) {
+          continue;
+        }
+        if (params.beforeTs && ts === params.beforeTs) {
+          continue;
+        }
+        const tsNumber = tsToNumber(ts);
+        if (beforeTsNumber != null && tsNumber != null && tsNumber >= beforeTsNumber) {
+          continue;
+        }
+        const text = (message.text ?? "").trim();
+        if (!text && (!message.files || message.files.length === 0)) {
+          continue;
+        }
+        collected.set(ts, {
+          text,
+          userId: normalizeSlackUserId(message.user) ?? undefined,
+          botId: normalizeSlackUserId(message.bot_id) ?? undefined,
+          username: normalizeSlackUserId(message.username) ?? undefined,
+          ts,
+          files: message.files,
+        });
+      }
+      if (collected.size >= THREAD_CONTEXT_MAX_MESSAGES) {
+        truncated = true;
+      }
+      const nextCursor = response.response_metadata?.next_cursor?.trim() || "";
+      if (truncated || !response.has_more || !nextCursor) {
+        break;
+      }
+      cursor = nextCursor;
+    } catch {
+      break;
+    }
+  }
+
+  return [...collected.values()].toSorted((a, b) => {
+    const aTs = tsToNumber(a.ts) ?? 0;
+    const bTs = tsToNumber(b.ts) ?? 0;
+    return aTs - bTs;
+  });
 }

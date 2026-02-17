@@ -10,11 +10,13 @@ import {
   resolveEnvelopeFormatOptions,
 } from "../../../auto-reply/envelope.js";
 import {
+  HISTORY_CONTEXT_MARKER,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
 } from "../../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import {
+  CURRENT_MESSAGE_MARKER,
   buildMentionRegexes,
   matchesMentionWithExplicit,
 } from "../../../auto-reply/reply/mentions.js";
@@ -47,6 +49,7 @@ import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.
 import {
   hasSlackThreadParticipant,
   resolveSlackMedia,
+  resolveSlackThreadMessages,
   resolveSlackThreadStarter,
 } from "../media.js";
 
@@ -447,26 +450,6 @@ export async function prepareSlackMessage(params: {
   });
 
   let combinedBody = body;
-  if (isRoomish && ctx.historyLimit > 0) {
-    combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: ctx.channelHistories,
-      historyKey,
-      limit: ctx.historyLimit,
-      currentMessage: combinedBody,
-      formatEntry: (entry) =>
-        formatInboundEnvelope({
-          channel: "Slack",
-          from: roomLabel,
-          timestamp: entry.timestamp,
-          body: `${entry.body}${
-            entry.messageId ? ` [id:${entry.messageId} channel:${message.channel}]` : ""
-          }`,
-          chatType: "channel",
-          senderLabel: entry.sender,
-          envelope: envelopeOptions,
-        }),
-    });
-  }
 
   const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
 
@@ -521,6 +504,72 @@ export async function prepareSlackMessage(params: {
     } else {
       threadLabel = `Slack thread ${roomLabel}`;
     }
+  }
+
+  if (isThreadReply && threadTs) {
+    const threadMessages = await resolveSlackThreadMessages({
+      channelId: message.channel,
+      threadTs,
+      client: ctx.app.client,
+      beforeTs: message.ts,
+    });
+    const threadContextEntries: string[] = [];
+    for (const threadMessage of threadMessages) {
+      const fallbackFile = threadMessage.files?.[0]?.name
+        ? `[Slack file: ${threadMessage.files[0].name}]`
+        : threadMessage.files?.length
+          ? "[Slack file]"
+          : "";
+      const messageBody = (threadMessage.text ?? "").trim() || fallbackFile;
+      if (!messageBody) {
+        continue;
+      }
+      const senderLabel = threadMessage.userId
+        ? ((await ctx.resolveUserName(threadMessage.userId))?.name ?? threadMessage.userId)
+        : (threadMessage.username ?? threadMessage.botId ?? "Unknown");
+      const withId = `${messageBody}\n[slack message id: ${threadMessage.ts ?? "unknown"} channel: ${message.channel}]`;
+      threadContextEntries.push(
+        formatInboundEnvelope({
+          channel: "Slack",
+          from: roomLabel,
+          timestamp: threadMessage.ts ? Math.round(Number(threadMessage.ts) * 1000) : undefined,
+          body: withId,
+          chatType: "channel",
+          senderLabel,
+          envelope: envelopeOptions,
+        }),
+      );
+    }
+    if (threadContextEntries.length > 0) {
+      combinedBody = [
+        HISTORY_CONTEXT_MARKER,
+        threadContextEntries.join("\n"),
+        "",
+        CURRENT_MESSAGE_MARKER,
+        body,
+      ].join("\n");
+    }
+  }
+
+  if (combinedBody === body && isRoomish && ctx.historyLimit > 0) {
+    combinedBody = buildPendingHistoryContextFromMap({
+      historyMap: ctx.channelHistories,
+      historyKey,
+      limit: ctx.historyLimit,
+      currentMessage: combinedBody,
+      formatEntry: (entry) =>
+        formatInboundEnvelope({
+          channel: "Slack",
+          from: roomLabel,
+          timestamp: entry.timestamp,
+          body: `${entry.body}${
+            entry.messageId ? ` [id:${entry.messageId} channel:${message.channel}]` : ""
+          }`,
+          chatType: "channel",
+          senderLabel: entry.sender,
+          envelope: envelopeOptions,
+        }),
+    });
   }
 
   // Use thread starter media if current message has none

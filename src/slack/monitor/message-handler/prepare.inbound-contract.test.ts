@@ -1,5 +1,5 @@
 import type { App } from "@slack/bolt";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -305,5 +305,109 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared).toBeTruthy();
     expect(prepared!.replyToMode).toBe("all");
     expect(prepared!.ctxPayload.MessageThreadId).toBe("2.000");
+  });
+
+  it("injects prior thread messages into current turn context", async () => {
+    const repliesMock = vi
+      .fn()
+      // thread starter fetch
+      .mockResolvedValueOnce({
+        messages: [{ ts: "100.000", text: "Root question", user: "U_ROOT" }],
+      })
+      // full thread context fetch
+      .mockResolvedValueOnce({
+        has_more: false,
+        messages: [
+          { ts: "100.000", text: "Root question", user: "U_ROOT" },
+          { ts: "100.100", text: "First follow-up", user: "U_A" },
+          { ts: "100.200", text: "Second follow-up", user: "U_B" },
+          { ts: "100.300", text: "Current question", user: "U1" },
+        ],
+      });
+    const slackCtx = createSlackMonitorContext({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      accountId: "default",
+      botToken: "token",
+      app: {
+        client: {
+          conversations: {
+            info: vi.fn().mockResolvedValue({
+              channel: { name: "general", is_channel: true },
+            }),
+            replies: repliesMock,
+          },
+          users: {
+            info: vi.fn().mockImplementation(async ({ user }: { user: string }) => ({
+              user: { profile: { display_name: user } },
+            })),
+          },
+        },
+      } as unknown as App,
+      runtime: {} as RuntimeEnv,
+      botUserId: "B1",
+      teamId: "T1",
+      apiAppId: "A1",
+      historyLimit: 0,
+      sessionScope: "per-sender",
+      mainKey: "main",
+      dmEnabled: true,
+      dmPolicy: "open",
+      allowFrom: [],
+      groupDmEnabled: true,
+      groupDmChannels: [],
+      defaultRequireMention: false,
+      groupPolicy: "open",
+      useAccessGroups: false,
+      reactionMode: "off",
+      reactionAllowlist: [],
+      replyToMode: "all",
+      threadHistoryScope: "thread",
+      threadInheritParent: false,
+      slashCommand: {
+        enabled: false,
+        name: "openclaw",
+        sessionPrefix: "slack:slash",
+        ephemeral: true,
+      },
+      textLimit: 4000,
+      ackReactionScope: "group-mentions",
+      mediaMaxBytes: 1024,
+      removeAckAfterReply: false,
+    });
+
+    const account: ResolvedSlackAccount = {
+      accountId: "default",
+      enabled: true,
+      botTokenSource: "config",
+      appTokenSource: "config",
+      config: { replyToMode: "all" },
+    };
+
+    const message: SlackMessageEvent = {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "Current question",
+      ts: "100.300",
+      thread_ts: "100.000",
+    } as SlackMessageEvent;
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.Body).toContain(
+      "[Chat messages since your last reply - for context]",
+    );
+    expect(prepared!.ctxPayload.Body).toContain("Root question");
+    expect(prepared!.ctxPayload.Body).toContain("First follow-up");
+    expect(prepared!.ctxPayload.Body).toContain("Second follow-up");
+    expect(prepared!.ctxPayload.Body).toContain("[Current message - respond to this]");
   });
 });
