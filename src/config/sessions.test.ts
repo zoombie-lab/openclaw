@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sleep } from "../utils.js";
 import {
   buildGroupDisplayName,
   deriveSessionKey,
   loadSessionStore,
+  resolvePredictableSessionPath,
   resolveSessionFilePath,
   resolveSessionKey,
   resolveSessionTranscriptPath,
@@ -444,6 +445,114 @@ describe("sessions", () => {
       expect(sessionFile).toBe(
         path.join(path.resolve("/custom/state"), "agents", "codex", "sessions", "sess-2.jsonl"),
       );
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
+  });
+
+  it("prefers predictable history paths over legacy agent transcript paths", () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = "/custom/state";
+    try {
+      const legacy = path.join(
+        path.resolve("/custom/state"),
+        "agents",
+        "main",
+        "sessions",
+        "sess-2.jsonl",
+      );
+      const entry = {
+        sessionId: "sess-2",
+        updatedAt: Date.now(),
+        sessionFile: legacy,
+        channel: "slack",
+        chatType: "direct" as const,
+        origin: {
+          from: "slack:U123",
+        },
+      };
+      const sessionFile = resolveSessionFilePath("sess-2", entry);
+      expect(sessionFile).toContain(
+        path.join(path.resolve("/custom/state"), "workspace", "history", "slack", "direct"),
+      );
+      expect(path.basename(sessionFile)).toMatch(/^\d{4}-\d{2}-\d{2}\.jsonl$/);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
+  });
+
+  it("rotates predictable history files when the date changes", () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = "/custom/state";
+    vi.useFakeTimers();
+    try {
+      const entry = {
+        sessionId: "sess-2",
+        updatedAt: Date.now(),
+        channel: "slack",
+        chatType: "direct" as const,
+        origin: {
+          from: "slack:U123",
+        },
+      };
+      vi.setSystemTime(new Date("2026-02-19T10:00:00.000Z"));
+      const day1 = resolvePredictableSessionPath(entry);
+      if (!day1) {
+        throw new Error("expected predictable path for day1");
+      }
+
+      vi.setSystemTime(new Date("2026-02-20T10:00:00.000Z"));
+      const day2 = resolveSessionFilePath("sess-2", {
+        ...entry,
+        sessionFile: day1,
+      });
+      expect(day2).not.toBe(day1);
+      expect(path.basename(day2)).toBe("2026-02-20.jsonl");
+    } finally {
+      vi.useRealTimers();
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
+  });
+
+  it("derives stable direct-chat ids regardless of from/to direction", () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = "/custom/state";
+    try {
+      const inbound = resolvePredictableSessionPath({
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        channel: "whatsapp",
+        chatType: "direct",
+        origin: {
+          from: "whatsapp:+15550000001",
+          to: "whatsapp:+15550000002",
+        },
+      });
+      const outbound = resolvePredictableSessionPath({
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        channel: "whatsapp",
+        chatType: "direct",
+        origin: {
+          from: "whatsapp:+15550000002",
+          to: "whatsapp:+15550000001",
+        },
+      });
+      expect(inbound).toBeTruthy();
+      expect(outbound).toBeTruthy();
+      expect(inbound).toBe(outbound);
     } finally {
       if (prev === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

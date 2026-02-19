@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -12,6 +13,7 @@ import {
 } from "../../utils/delivery-context.js";
 import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
+import { resolveSessionFilePath } from "./paths.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 // ============================================================================
@@ -395,6 +397,8 @@ export async function recordSessionMetaFromInbound(params: {
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, ctx } = params;
   const createIfMissing = params.createIfMissing ?? true;
+  const parsed = parseAgentSessionKey(sessionKey);
+  const agentId = parsed?.agentId;
   return await updateSessionStore(storePath, (store) => {
     const existing = store[sessionKey];
     const patch = deriveSessionMetaPatch({
@@ -410,6 +414,11 @@ export async function recordSessionMetaFromInbound(params: {
       return null;
     }
     const next = mergeSessionEntry(existing, patch);
+    const nextSessionFile = resolveSessionFilePath(next.sessionId, next, { agentId });
+    if (!next.sessionFile || next.sessionFile !== nextSessionFile) {
+      next.sessionFile = nextSessionFile;
+    }
+
     store[sessionKey] = next;
     return next;
   });

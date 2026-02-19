@@ -9,6 +9,7 @@ import type {
 } from "../config/types.memory.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { resolveSessionHistoryDir } from "../config/sessions/paths.js";
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
@@ -232,6 +233,7 @@ function resolveDefaultCollections(
     { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
     { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
+    { path: resolveSessionHistoryDir(), pattern: "**/*.jsonl", base: "history-logs" },
   ];
   return entries.map((entry) => ({
     name: ensureUniqueName(entry.base, existing),

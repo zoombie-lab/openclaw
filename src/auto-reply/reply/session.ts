@@ -20,7 +20,6 @@ import {
   resolveGroupSessionKey,
   resolveSessionFilePath,
   resolveSessionKey,
-  resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
   type SessionScope,
@@ -328,11 +327,10 @@ export async function initSessionState(params: {
     }
   }
   if (!sessionEntry.sessionFile) {
-    sessionEntry.sessionFile = resolveSessionTranscriptPath(
-      sessionEntry.sessionId,
+    sessionEntry.sessionFile = resolveSessionFilePath(sessionEntry.sessionId, sessionEntry, {
       agentId,
-      ctx.MessageThreadId,
-    );
+      topicId: ctx.MessageThreadId,
+    });
   }
   if (isNewSession) {
     sessionEntry.compactionCount = 0;

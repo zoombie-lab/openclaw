@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveSessionHistoryDir } from "../config/sessions/paths.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 
 describe("resolveMemoryBackendConfig", () => {
@@ -92,5 +93,36 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(12_000);
     expect(resolved.qmd?.update.updateTimeoutMs).toBe(480_000);
     expect(resolved.qmd?.update.embedTimeoutMs).toBe(360_000);
+  });
+
+  it("uses shared workspace history collection for every agent", () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-state";
+    try {
+      const cfg = {
+        agents: {
+          list: [{ id: "main", default: true }, { id: "inventory" }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {},
+        },
+      } as OpenClawConfig;
+
+      const main = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+      const inventory = resolveMemoryBackendConfig({ cfg, agentId: "inventory" });
+      const mainHistory = main.qmd?.collections.find((c) => c.name === "history-logs");
+      const inventoryHistory = inventory.qmd?.collections.find((c) => c.name === "history-logs");
+      const expected = resolveSessionHistoryDir();
+
+      expect(mainHistory?.path).toBe(expected);
+      expect(inventoryHistory?.path).toBe(expected);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
   });
 });

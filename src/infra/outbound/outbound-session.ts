@@ -961,17 +961,20 @@ export async function ensureOutboundSessionEntry(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.agentId,
   });
+  const chatType = params.route.chatType;
+  const from = chatType === "direct" ? params.route.to : params.route.from;
+  const to = chatType === "direct" ? params.route.from : params.route.to;
   const ctx: MsgContext = {
-    From: params.route.from,
-    To: params.route.to,
+    From: from,
+    To: to,
     SessionKey: params.route.sessionKey,
     AccountId: params.accountId ?? undefined,
-    ChatType: params.route.chatType,
+    ChatType: chatType,
     Provider: params.channel,
     Surface: params.channel,
     MessageThreadId: params.route.threadId,
     OriginatingChannel: params.channel,
-    OriginatingTo: params.route.to,
+    OriginatingTo: to,
   };
   try {
     await recordSessionMetaFromInbound({
