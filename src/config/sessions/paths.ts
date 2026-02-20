@@ -86,19 +86,42 @@ function normalizeIdToken(value?: string | number): string | null {
 
 function resolvePredictableSessionId(entry: SessionEntry, type: string): string {
   if (type === "direct") {
+    const senderName = entry.origin?.senderName?.trim();
+    if (senderName) {
+      return `dm-${sanitizePathToken(senderName)}`;
+    }
     const from = normalizeIdToken(entry.origin?.from);
     const to = normalizeIdToken(entry.origin?.to);
     if (from && to) {
-      return from === to ? from : [from, to].toSorted().join("__");
+      return `dm-${from === to ? from : [from, to].toSorted().join("__")}`;
     }
-    return from || to || "unknown";
+    return from ? `dm-${from}` : to ? `dm-${to}` : "unknown";
   }
 
+  const channelName = entry.origin?.channelName?.trim();
+  if (channelName) {
+    return sanitizePathToken(channelName);
+  }
   const channelId =
     normalizeIdToken(entry.groupId) ||
     normalizeIdToken(entry.origin?.from) ||
     normalizeIdToken(entry.origin?.to);
   return channelId || "unknown";
+}
+
+function dateFromThreadTs(threadId: string | null, platform: string): Date | null {
+  if (platform !== "slack" || !threadId) {
+    return null;
+  }
+  // Slack thread IDs are message timestamps like "1718452800.123456".
+  if (!/^\d{10}(?:\.\d+)?$/.test(threadId)) {
+    return null;
+  }
+  const seconds = Number(threadId.split(".")[0]);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return null;
+  }
+  return new Date(seconds * 1000);
 }
 
 export function resolvePredictableSessionPath(
@@ -118,18 +141,30 @@ export function resolvePredictableSessionPath(
   if (baseId === "unknown") {
     return null;
   }
-  const combinedId = threadId ? `${baseId}__thread_${threadId}` : baseId;
 
-  const safeId = sanitizePathToken(combinedId);
   const safePlatform = sanitizePathToken(platform);
-  const safeType = sanitizePathToken(type);
-
-  const date = new Date();
-  const dateStr = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-
-  // Structure: history/{platform}/{type}/{id}/{date}.jsonl
   const historyDir = resolveSessionHistoryDir(env, homedir);
-  return path.join(historyDir, safePlatform, safeType, safeId, `${dateStr}.jsonl`);
+
+  if (!threadId) {
+    return null;
+  }
+
+  const isDirect = type === "direct";
+  const senderName = entry.origin?.senderName?.trim();
+  const safeSender = senderName ? sanitizePathToken(senderName) : null;
+
+  // Derive date from thread start timestamp so all messages in one thread land in one file
+  const threadDate = dateFromThreadTs(threadId, platform) ?? new Date();
+  const dateStr = `${threadDate.getFullYear()}-${pad(threadDate.getMonth() + 1)}-${pad(threadDate.getDate())}`;
+  const safeThread = sanitizePathToken(threadId);
+
+  if (isDirect) {
+    // DMs: history/slack/dm-{sender}/{date}_{threadTs}.jsonl
+    return path.join(historyDir, safePlatform, baseId, `${dateStr}_${safeThread}.jsonl`);
+  }
+  // Channel threads: history/slack/{channel}/{date}_{sender}_{threadTs}.jsonl
+  const senderPart = safeSender ? `_${safeSender}` : "";
+  return path.join(historyDir, safePlatform, baseId, `${dateStr}${senderPart}_${safeThread}.jsonl`);
 }
 
 export function resolveSessionFilePath(
@@ -155,7 +190,8 @@ export function resolveSessionFilePath(
       }
       const resolvedHistoryDir = path.resolve(resolveSessionHistoryDir());
       if (resolvedCandidate.startsWith(`${resolvedHistoryDir}${path.sep}`)) {
-        return predictable;
+        // Keep an existing history transcript path stable for the lifetime of the thread.
+        return candidate;
       }
     }
   }

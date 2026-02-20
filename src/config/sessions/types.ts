@@ -21,6 +21,8 @@ export type SessionOrigin = {
   accountId?: string;
   threadId?: string | number;
   senderTimezone?: string;
+  senderName?: string;
+  channelName?: string;
 };
 
 export type SessionEntry = {

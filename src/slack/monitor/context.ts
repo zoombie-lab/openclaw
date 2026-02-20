@@ -113,7 +113,9 @@ export type SlackMonitorContext = {
     topic?: string;
     purpose?: string;
   }>;
-  resolveUserName: (userId: string) => Promise<{ name?: string; timezone?: string }>;
+  resolveUserName: (
+    userId: string,
+  ) => Promise<{ name?: string; timezone?: string; username?: string }>;
   setSlackThreadStatus: (params: {
     channelId: string;
     threadTs?: string;
@@ -156,6 +158,11 @@ export function createSlackMonitorContext(params: {
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
 }): SlackMonitorContext {
+  const SLACK_MESSAGE_DEDUPE_TTL_MS = 20 * 60_000;
+  const SLACK_MESSAGE_DEDUPE_MAX = 5000;
+  const SLACK_EVENT_DEDUPE_TTL_MS = 30 * 60_000;
+  const SLACK_EVENT_DEDUPE_MAX = 10000;
+
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
 
@@ -168,8 +175,15 @@ export function createSlackMonitorContext(params: {
       purpose?: string;
     }
   >();
-  const userCache = new Map<string, { name?: string; timezone?: string }>();
-  const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
+  const userCache = new Map<string, { name?: string; timezone?: string; username?: string }>();
+  const seenMessages = createDedupeCache({
+    ttlMs: SLACK_MESSAGE_DEDUPE_TTL_MS,
+    maxSize: SLACK_MESSAGE_DEDUPE_MAX,
+  });
+  const seenEventCallbacks = createDedupeCache({
+    ttlMs: SLACK_EVENT_DEDUPE_TTL_MS,
+    maxSize: SLACK_EVENT_DEDUPE_MAX,
+  });
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
@@ -252,7 +266,8 @@ export function createSlackMonitorContext(params: {
       const name = profile?.display_name || profile?.real_name || info.user?.name || undefined;
       const timezone =
         typeof info.user?.tz === "string" && info.user.tz.trim() ? info.user.tz.trim() : undefined;
-      const entry = { name, timezone };
+      const username = info.user?.name || undefined;
+      const entry = { name, timezone, username };
       userCache.set(userId, entry);
       return entry;
     } catch {
@@ -370,9 +385,27 @@ export function createSlackMonitorContext(params: {
     if (!body || typeof body !== "object") {
       return false;
     }
-    const raw = body as { api_app_id?: unknown; team_id?: unknown };
+    const raw = body as {
+      api_app_id?: unknown;
+      team_id?: unknown;
+      type?: unknown;
+      event_id?: unknown;
+    };
     const incomingApiAppId = typeof raw.api_app_id === "string" ? raw.api_app_id : "";
     const incomingTeamId = typeof raw.team_id === "string" ? raw.team_id : "";
+    const incomingType = typeof raw.type === "string" ? raw.type : "";
+    const incomingEventId = typeof raw.event_id === "string" ? raw.event_id : "";
+
+    if (incomingType === "event_callback" && incomingEventId) {
+      const dedupeTeamId = incomingTeamId || params.teamId || "unknown";
+      const dedupeKey = `${dedupeTeamId}:${incomingEventId}`;
+      if (seenEventCallbacks.check(dedupeKey)) {
+        logVerbose(
+          `slack: drop duplicate event_callback event_id=${incomingEventId} team_id=${dedupeTeamId}`,
+        );
+        return true;
+      }
+    }
 
     if (params.apiAppId && incomingApiAppId && incomingApiAppId !== params.apiAppId) {
       logVerbose(

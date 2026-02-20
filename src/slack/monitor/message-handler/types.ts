@@ -19,7 +19,7 @@ export type PreparedSlackMessage = {
   historyKey: string;
   preview: string;
   replyToMode: ReplyToMode;
+  shouldAckReaction: boolean;
   ackReactionMessageTs?: string;
   ackReactionValue: string;
-  ackReactionPromise: Promise<boolean> | null;
 };

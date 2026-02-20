@@ -9,7 +9,7 @@ import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
-import { removeSlackReaction } from "../../actions.js";
+import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { createSlackReplyDeliveryPlan, deliverReplies } from "../replies.js";
 
@@ -102,6 +102,25 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     accountId: route.accountId,
   });
 
+  const ackReactionPromise =
+    prepared.shouldAckReaction && prepared.ackReactionMessageTs && prepared.ackReactionValue
+      ? reactSlackMessage(
+          message.channel,
+          prepared.ackReactionMessageTs,
+          prepared.ackReactionValue,
+          {
+            token: ctx.botToken,
+            client: ctx.app.client,
+          },
+        ).then(
+          () => true,
+          (err) => {
+            logVerbose(`slack react failed for channel ${message.channel}: ${String(err)}`);
+            return false;
+          },
+        )
+      : null;
+
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
@@ -165,7 +184,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   removeAckReactionAfterReply({
     removeAfterReply: ctx.removeAckAfterReply,
-    ackReactionPromise: prepared.ackReactionPromise,
+    ackReactionPromise,
     ackReactionValue: prepared.ackReactionValue,
     remove: () =>
       removeSlackReaction(

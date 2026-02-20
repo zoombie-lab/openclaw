@@ -39,7 +39,6 @@ import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../../security/channel-metadata.js";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
-import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
@@ -376,35 +375,20 @@ export async function prepareSlackMessage(params: {
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const ackReactionValue = ackReaction ?? "";
 
-  const shouldAckReaction = () =>
-    Boolean(
-      ackReaction &&
-      shouldAckReactionGate({
-        scope: ctx.ackReactionScope as AckReactionScope | undefined,
-        isDirect: isDirectMessage,
-        isGroup: isRoomish,
-        isMentionableGroup: isRoom,
-        requireMention: Boolean(shouldRequireMention),
-        canDetectMention,
-        effectiveWasMentioned,
-        shouldBypassMention: mentionGate.shouldBypassMention,
-      }),
-    );
-
+  const shouldAckReaction = Boolean(
+    ackReaction &&
+    shouldAckReactionGate({
+      scope: ctx.ackReactionScope as AckReactionScope | undefined,
+      isDirect: isDirectMessage,
+      isGroup: isRoomish,
+      isMentionableGroup: isRoom,
+      requireMention: Boolean(shouldRequireMention),
+      canDetectMention,
+      effectiveWasMentioned,
+      shouldBypassMention: mentionGate.shouldBypassMention,
+    }),
+  );
   const ackReactionMessageTs = message.ts;
-  const ackReactionPromise =
-    shouldAckReaction() && ackReactionMessageTs && ackReactionValue
-      ? reactSlackMessage(message.channel, ackReactionMessageTs, ackReactionValue, {
-          token: ctx.botToken,
-          client: ctx.app.client,
-        }).then(
-          () => true,
-          (err) => {
-            logVerbose(`slack react failed for channel ${message.channel}: ${String(err)}`);
-            return false;
-          },
-        )
-      : null;
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
   const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
@@ -590,6 +574,8 @@ export async function prepareSlackMessage(params: {
     UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
     SenderName: senderName,
     SenderId: senderId,
+    SenderUsername: sender?.username || message.username || senderId,
+    GroupChannel: isRoomish && channelName ? `#${channelName}` : undefined,
     SenderTimezone: senderTimezone,
     Provider: "slack" as const,
     Surface: "slack" as const,
@@ -656,8 +642,8 @@ export async function prepareSlackMessage(params: {
     historyKey,
     preview,
     replyToMode,
+    shouldAckReaction,
     ackReactionMessageTs,
     ackReactionValue,
-    ackReactionPromise,
   };
 }
