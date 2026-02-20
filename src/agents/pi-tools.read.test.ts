@@ -26,6 +26,13 @@ describe("pi-tools.read helpers", () => {
     expect(normalizeToolParams("README.md")).toEqual({ path: "README.md" });
   });
 
+  it("normalizes additional path aliases used by some models", () => {
+    expect(normalizeToolParams({ file: "README.md" })).toEqual({ path: "README.md" });
+    expect(normalizeToolParams({ directory: "/data/shared/tasks/queue" })).toEqual({
+      path: "/data/shared/tasks/queue",
+    });
+  });
+
   it("returns directory listing results for directory reads", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-dir-"));
     const nestedDir = path.join(root, "nested");

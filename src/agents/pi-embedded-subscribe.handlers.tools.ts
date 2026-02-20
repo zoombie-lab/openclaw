@@ -11,6 +11,7 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import { normalizeToolParams } from "./pi-tools.read.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
@@ -52,12 +53,15 @@ export async function handleToolExecutionStart(
   const args = evt.args;
 
   if (toolName === "read") {
-    const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    const normalized = normalizeToolParams(args);
+    const record =
+      normalized ?? (args && typeof args === "object" ? (args as Record<string, unknown>) : {});
     const filePath = typeof record.path === "string" ? record.path.trim() : "";
     if (!filePath) {
       const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
+      const argKeys = record && typeof record === "object" ? Object.keys(record).join(",") : "";
       ctx.log.warn(
-        `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
+        `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argKeys ? ` argKeys=${argKeys}` : ""}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
       );
     }
   }
