@@ -116,6 +116,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+  // Announce queue should enqueue work quickly and never block on full downstream completion.
   await callGateway({
     method: "agent",
     params: {
@@ -128,8 +129,8 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       deliver: true,
       idempotencyKey: crypto.randomUUID(),
     },
-    expectFinal: true,
-    timeoutMs: 60_000,
+    expectFinal: false,
+    timeoutMs: 12_000,
   });
 }
 

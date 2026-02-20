@@ -1,5 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { detectMime } from "../media/mime.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -99,6 +101,125 @@ async function normalizeReadImageResult(
   return { ...result, content: nextContent };
 }
 
+function resolveReadPath(filePath: string, rootDir?: string): string {
+  if (path.isAbsolute(filePath)) {
+    return filePath;
+  }
+  return path.resolve(rootDir ?? process.cwd(), filePath);
+}
+
+async function maybeDirectoryListingResult(params: {
+  filePath: string;
+  rootDir?: string;
+}): Promise<AgentToolResult<unknown> | undefined> {
+  const resolvedPath = resolveReadPath(params.filePath, params.rootDir);
+  let stats: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stats = await fs.stat(resolvedPath);
+  } catch {
+    return undefined;
+  }
+  if (!stats.isDirectory()) {
+    return undefined;
+  }
+
+  const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  const lines = entries.map((entry) => {
+    if (entry.isDirectory()) {
+      return `- ${entry.name}/`;
+    }
+    if (entry.isSymbolicLink()) {
+      return `- ${entry.name}@`;
+    }
+    return `- ${entry.name}`;
+  });
+  const body = lines.length > 0 ? lines.join("\n") : "(empty directory)";
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Directory listing for ${params.filePath}\n${body}`,
+      },
+    ],
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function hasDirectToolKeys(record: Record<string, unknown>): boolean {
+  const keys = [
+    "path",
+    "file_path",
+    "filePath",
+    "filepath",
+    "content",
+    "oldText",
+    "old_string",
+    "newText",
+    "new_string",
+  ];
+  return keys.some((key) => key in record);
+}
+
+function unwrapToolParams(params: unknown): Record<string, unknown> | undefined {
+  if (typeof params === "string") {
+    return { path: params };
+  }
+  let record = asRecord(params);
+  if (!record) {
+    return undefined;
+  }
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (hasDirectToolKeys(record)) {
+      break;
+    }
+    const nested = [
+      record.input,
+      record.arguments,
+      record.args,
+      record.params,
+      record.payload,
+      record.toolInput,
+    ]
+      .map(asRecord)
+      .find((candidate) => !!candidate);
+    if (!nested) {
+      break;
+    }
+    record = nested;
+  }
+  return { ...record };
+}
+
+function applyFirstAlias(params: Record<string, unknown>, target: string, aliases: string[]) {
+  if (typeof params[target] === "string" && params[target].trim()) {
+    for (const alias of aliases) {
+      if (alias !== target) {
+        delete params[alias];
+      }
+    }
+    return;
+  }
+  for (const alias of aliases) {
+    const value = params[alias];
+    if (typeof value === "string" && value.trim()) {
+      params[target] = value;
+      for (const cleanupKey of aliases) {
+        if (cleanupKey !== target) {
+          delete params[cleanupKey];
+        }
+      }
+      return;
+    }
+  }
+}
+
 type RequiredParamGroup = {
   keys: readonly string[];
   allowEmpty?: boolean;
@@ -125,26 +246,39 @@ export const CLAUDE_PARAM_GROUPS = {
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
 export function normalizeToolParams(params: unknown): Record<string, unknown> | undefined {
-  if (!params || typeof params !== "object") {
+  const normalized = unwrapToolParams(params);
+  if (!normalized) {
     return undefined;
   }
-  const record = params as Record<string, unknown>;
-  const normalized = { ...record };
-  // file_path → path (read, write, edit)
-  if ("file_path" in normalized && !("path" in normalized)) {
-    normalized.path = normalized.file_path;
-    delete normalized.file_path;
-  }
-  // old_string → oldText (edit)
-  if ("old_string" in normalized && !("oldText" in normalized)) {
-    normalized.oldText = normalized.old_string;
-    delete normalized.old_string;
-  }
-  // new_string → newText (edit)
-  if ("new_string" in normalized && !("newText" in normalized)) {
-    normalized.newText = normalized.new_string;
-    delete normalized.new_string;
-  }
+  applyFirstAlias(normalized, "path", [
+    "file_path",
+    "filePath",
+    "filepath",
+    "filename",
+    "target_file",
+    "targetFile",
+  ]);
+  applyFirstAlias(normalized, "oldText", [
+    "old_string",
+    "oldString",
+    "old_text",
+    "old",
+    "from",
+    "find",
+    "search",
+    "searchText",
+  ]);
+  applyFirstAlias(normalized, "newText", [
+    "new_string",
+    "newString",
+    "new_text",
+    "new",
+    "to",
+    "replace",
+    "replacement",
+    "replacementText",
+    "replaceWith",
+  ]);
   return normalized;
 }
 
@@ -270,7 +404,7 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
 
 export function createSandboxedReadTool(root: string) {
   const base = createReadTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(createOpenClawReadTool(base), root);
+  return wrapSandboxPathGuard(createOpenClawReadTool(base, root), root);
 }
 
 export function createSandboxedWriteTool(root: string) {
@@ -283,7 +417,7 @@ export function createSandboxedEditTool(root: string) {
   return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit), root);
 }
 
-export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
+export function createOpenClawReadTool(base: AnyAgentTool, rootDir?: string): AnyAgentTool {
   const patched = patchToolSchemaForClaudeCompatibility(base);
   return {
     ...patched,
@@ -293,10 +427,17 @@ export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
+      const filePath = typeof record?.path === "string" ? record.path.trim() : "";
+      const dirListing = filePath
+        ? await maybeDirectoryListingResult({ filePath, rootDir })
+        : undefined;
+      if (dirListing) {
+        return dirListing;
+      }
       const result = await base.execute(toolCallId, normalized ?? params, signal);
-      const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
+      const resultPath = filePath || "<unknown>";
       const normalizedResult = await normalizeReadImageResult(result, filePath);
-      return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
+      return sanitizeToolResultImages(normalizedResult, `read:${resultPath}`);
     },
   };
 }

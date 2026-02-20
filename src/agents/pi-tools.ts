@@ -55,7 +55,9 @@ import {
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
-  return normalized === "openai" || normalized === "openai-codex";
+  return (
+    normalized === "openai" || normalized === "openai-codex" || normalized === "vercel-ai-gateway"
+  );
 }
 
 function isApplyPatchAllowedForModel(params: {
@@ -248,7 +250,7 @@ export function createOpenClawCodingTools(options?: {
         return [createSandboxedReadTool(sandboxRoot)];
       }
       const freshReadTool = createReadTool(workspaceRoot);
-      return [createOpenClawReadTool(freshReadTool)];
+      return [createOpenClawReadTool(freshReadTool, workspaceRoot)];
     }
     if (tool.name === "bash" || tool.name === execToolName) {
       return [];
