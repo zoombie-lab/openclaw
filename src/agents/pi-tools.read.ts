@@ -142,6 +142,11 @@ async function maybeDirectoryListingResult(params: {
         text: `Directory listing for ${params.filePath}\n${body}`,
       },
     ],
+    details: {
+      path: params.filePath,
+      resolvedPath,
+      entries: entries.map((entry) => entry.name),
+    },
   };
 }
 
@@ -171,24 +176,26 @@ function unwrapToolParams(params: unknown): Record<string, unknown> | undefined 
   if (typeof params === "string") {
     return { path: params };
   }
-  let record = asRecord(params);
-  if (!record) {
+  const initial = asRecord(params);
+  if (!initial) {
     return undefined;
   }
+  let record: Record<string, unknown> = initial;
   for (let depth = 0; depth < 3; depth += 1) {
     if (hasDirectToolKeys(record)) {
       break;
     }
-    const nested = [
+    const nestedCandidates: unknown[] = [
       record.input,
       record.arguments,
       record.args,
       record.params,
       record.payload,
       record.toolInput,
-    ]
-      .map(asRecord)
-      .find((candidate) => !!candidate);
+    ];
+    const nested = nestedCandidates
+      .map((candidate) => asRecord(candidate))
+      .find((candidate): candidate is Record<string, unknown> => candidate !== undefined);
     if (!nested) {
       break;
     }
