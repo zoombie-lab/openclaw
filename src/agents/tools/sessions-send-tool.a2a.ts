@@ -15,6 +15,14 @@ type RunCompletion = {
   error?: string;
 };
 
+function extractTaskPathFromMessage(message?: string): string | undefined {
+  if (typeof message !== "string") {
+    return undefined;
+  }
+  const match = message.match(/\/data\/shared\/tasks\/queue\/[^\s`"')]+\.md/i);
+  return match?.[0];
+}
+
 async function waitForRunCompletion(runId: string): Promise<RunCompletion> {
   const deadline = Date.now() + MAX_COMPLETION_WATCH_MS;
   while (Date.now() < deadline) {
@@ -51,17 +59,19 @@ function buildCompletionCallbackMessage(params: {
   runId: string;
   displayKey: string;
   completion: RunCompletion;
+  taskPath?: string;
 }) {
   const lines = [
     "TASK_COMPLETE",
     `runId: ${params.runId}`,
     `targetSession: ${params.displayKey}`,
     `status: ${params.completion.status}`,
+    params.taskPath ? `taskFile: ${params.taskPath}` : undefined,
   ];
   if (params.completion.error) {
     lines.push(`error: ${params.completion.error}`);
   }
-  return lines.join("\n");
+  return lines.filter((line): line is string => typeof line === "string").join("\n");
 }
 
 export async function runSessionsSendA2AFlow(params: {
@@ -70,6 +80,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
   waitRunId?: string;
+  sourceMessage?: string;
 }) {
   const runId = params.waitRunId;
   try {
@@ -81,10 +92,16 @@ export async function runSessionsSendA2AFlow(params: {
     }
 
     const completion = await waitForRunCompletion(runId);
+    const callbackChannel =
+      params.requesterChannel && params.requesterChannel !== INTERNAL_MESSAGE_CHANNEL
+        ? params.requesterChannel
+        : INTERNAL_MESSAGE_CHANNEL;
+    const callbackDeliver = callbackChannel !== INTERNAL_MESSAGE_CHANNEL;
     const callbackMessage = buildCompletionCallbackMessage({
       runId,
       displayKey: params.displayKey,
       completion,
+      taskPath: extractTaskPathFromMessage(params.sourceMessage),
     });
     await callGateway({
       method: "agent",
@@ -92,13 +109,16 @@ export async function runSessionsSendA2AFlow(params: {
         message: callbackMessage,
         sessionKey: params.requesterSessionKey,
         idempotencyKey: crypto.randomUUID(),
-        deliver: false,
-        channel: INTERNAL_MESSAGE_CHANNEL,
+        deliver: callbackDeliver,
+        channel: callbackChannel,
         lane: AGENT_LANE_NESTED,
         extraSystemPrompt: [
           "Task completion callback from sessions_send.",
           params.requesterChannel ? `Requester channel: ${params.requesterChannel}.` : undefined,
           `Target session: ${params.displayKey}.`,
+          callbackDeliver
+            ? "If this callback corresponds to a multi-specialist workflow, post a concise progress update and only send final synthesis after all required specialist sections are complete."
+            : undefined,
           "Acknowledge completion and decide if follow-up work is needed.",
         ]
           .filter(Boolean)

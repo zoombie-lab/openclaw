@@ -422,7 +422,8 @@ describe("sessions tools", () => {
 
     const fire = await tool.execute("call5", {
       sessionKey: "main",
-      message: "ping",
+      message:
+        "New task assigned: /data/shared/tasks/queue/2026-02-21-gather-7-days-data.md. Please acknowledge receipt.",
       timeoutSeconds: 0,
     });
     expect(fire.details).toMatchObject({
@@ -456,7 +457,26 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
+      });
+    }
+    const callbackCalls = agentCalls.filter(
+      (call) => (call.params as { sessionKey?: string })?.sessionKey === requesterKey,
+    );
+    expect(callbackCalls).toHaveLength(2);
+    for (const call of callbackCalls) {
+      expect(call.params).toMatchObject({
+        channel: "discord",
+        deliver: true,
+      });
+    }
+    const targetCalls = agentCalls.filter(
+      (call) => (call.params as { sessionKey?: string })?.sessionKey !== requesterKey,
+    );
+    expect(targetCalls).toHaveLength(2);
+    for (const call of targetCalls) {
+      expect(call.params).toMatchObject({
         channel: "webchat",
+        deliver: false,
       });
     }
     expect(
@@ -473,6 +493,15 @@ describe("sessions tools", () => {
         (call) =>
           (call.params as { sessionKey?: string; message?: string })?.sessionKey === requesterKey &&
           ((call.params as { message?: string })?.message ?? "").includes("TASK_COMPLETE"),
+      ),
+    ).toBe(true);
+    expect(
+      agentCalls.some(
+        (call) =>
+          (call.params as { sessionKey?: string; message?: string })?.sessionKey === requesterKey &&
+          ((call.params as { message?: string })?.message ?? "").includes(
+            "taskFile: /data/shared/tasks/queue/2026-02-21-gather-7-days-data.md",
+          ),
       ),
     ).toBe(true);
     expect(
@@ -585,7 +614,6 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        channel: "webchat",
       });
     }
     const callbackCall = agentCalls.find(
@@ -594,6 +622,10 @@ describe("sessions tools", () => {
         ((call.params as { message?: string })?.message ?? "").includes("TASK_COMPLETE"),
     );
     expect(callbackCall).toBeDefined();
+    expect(callbackCall?.params).toMatchObject({
+      channel: "discord",
+      deliver: true,
+    });
     expect((callbackCall?.params as { message?: string })?.message).toContain("status: error");
     expect((callbackCall?.params as { message?: string })?.message).toContain("error: boom");
   });

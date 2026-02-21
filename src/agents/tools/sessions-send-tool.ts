@@ -270,6 +270,7 @@ export function createSessionsSendTool(opts?: {
           requesterSessionKey,
           requesterChannel,
           waitRunId,
+          sourceMessage: message,
         });
       };
 
