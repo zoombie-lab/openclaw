@@ -370,10 +370,7 @@ describe("sessions tools", () => {
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let _historyCallCount = 0;
     let sendCallCount = 0;
-    let lastWaitedRunId: string | undefined;
-    const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
@@ -381,17 +378,6 @@ describe("sessions tools", () => {
       if (request.method === "agent") {
         agentCallCount += 1;
         const runId = `run-${agentCallCount}`;
-        const params = request.params as { message?: string; sessionKey?: string } | undefined;
-        const message = params?.message ?? "";
-        let reply = "REPLY_SKIP";
-        if (message === "ping" || message === "wait") {
-          reply = "done";
-        } else if (message === "Agent-to-agent announce step.") {
-          reply = "ANNOUNCE_SKIP";
-        } else if (params?.sessionKey === requesterKey) {
-          reply = "pong";
-        }
-        replyByRunId.set(runId, reply);
         return {
           runId,
           status: "accepted",
@@ -400,12 +386,9 @@ describe("sessions tools", () => {
       }
       if (request.method === "agent.wait") {
         const params = request.params as { runId?: string } | undefined;
-        lastWaitedRunId = params?.runId;
         return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
-        _historyCallCount += 1;
-        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
           messages: [
             {
@@ -413,7 +396,7 @@ describe("sessions tools", () => {
               content: [
                 {
                   type: "text",
-                  text,
+                  text: "done",
                 },
               ],
               timestamp: 20,
@@ -447,9 +430,8 @@ describe("sessions tools", () => {
       runId: "run-1",
       delivery: { status: "pending", mode: "announce" },
     });
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 4);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 2);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 1);
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -463,14 +445,14 @@ describe("sessions tools", () => {
       delivery: { status: "pending", mode: "announce" },
     });
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 8);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 4);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 3);
+    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 1);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
     const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
-    expect(agentCalls).toHaveLength(8);
+    expect(agentCalls).toHaveLength(4);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
@@ -489,10 +471,8 @@ describe("sessions tools", () => {
     expect(
       agentCalls.some(
         (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-            "Agent-to-agent reply step",
-          ),
+          (call.params as { sessionKey?: string; message?: string })?.sessionKey === requesterKey &&
+          ((call.params as { message?: string })?.message ?? "").includes("TASK_COMPLETE"),
       ),
     ).toBe(true);
     expect(
@@ -500,12 +480,12 @@ describe("sessions tools", () => {
         (call) =>
           typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
           (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-            "Agent-to-agent announce step",
+            "Task completion callback from sessions_send.",
           ),
       ),
     ).toBe(true);
-    expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(8);
+    expect(waitCalls).toHaveLength(3);
+    expect(historyOnlyCalls).toHaveLength(1);
     expect(sendCallCount).toBe(0);
   });
 
@@ -558,36 +538,18 @@ describe("sessions tools", () => {
     });
   });
 
-  it("sessions_send runs ping-pong then announces", async () => {
+  it("sessions_send sends an error callback to requester when target run fails", async () => {
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let lastWaitedRunId: string | undefined;
-    const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
     const targetKey = "discord:group:target";
-    let sendParams: { to?: string; channel?: string; message?: string } = {};
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
       if (request.method === "agent") {
         agentCallCount += 1;
         const runId = `run-${agentCallCount}`;
-        const params = request.params as
-          | {
-              message?: string;
-              sessionKey?: string;
-              extraSystemPrompt?: string;
-            }
-          | undefined;
-        let reply = "initial";
-        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
-          reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
-        }
-        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
-          reply = "announce now";
-        }
-        replyByRunId.set(runId, reply);
         return {
           runId,
           status: "accepted",
@@ -596,31 +558,7 @@ describe("sessions tools", () => {
       }
       if (request.method === "agent.wait") {
         const params = request.params as { runId?: string } | undefined;
-        lastWaitedRunId = params?.runId;
-        return { runId: params?.runId ?? "run-1", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
-        return {
-          messages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              timestamp: 20,
-            },
-          ],
-        };
-      }
-      if (request.method === "send") {
-        const params = request.params as
-          | { to?: string; channel?: string; message?: string }
-          | undefined;
-        sendParams = {
-          to: params?.to,
-          channel: params?.channel,
-          message: params?.message,
-        };
-        return { messageId: "m-announce" };
+        return { runId: params?.runId ?? "run-1", status: "error", error: "boom" };
       }
       return {};
     });
@@ -637,37 +575,26 @@ describe("sessions tools", () => {
     const waited = await tool.execute("call7", {
       sessionKey: targetKey,
       message: "ping",
-      timeoutSeconds: 1,
+      timeoutSeconds: 0,
     });
-    expect(waited.details).toMatchObject({
-      status: "ok",
-      reply: "initial",
-    });
-    await sleep(0);
-    await sleep(0);
+    expect(waited.details).toMatchObject({ status: "accepted" });
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 2);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(agentCalls).toHaveLength(4);
+    expect(agentCalls).toHaveLength(2);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
         channel: "webchat",
       });
     }
-
-    const replySteps = calls.filter(
+    const callbackCall = agentCalls.find(
       (call) =>
-        call.method === "agent" &&
-        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-          "Agent-to-agent reply step",
-        ),
+        (call.params as { sessionKey?: string })?.sessionKey === requesterKey &&
+        ((call.params as { message?: string })?.message ?? "").includes("TASK_COMPLETE"),
     );
-    expect(replySteps).toHaveLength(2);
-    expect(sendParams).toMatchObject({
-      to: "channel:target",
-      channel: "discord",
-      message: "announce now",
-    });
+    expect(callbackCall).toBeDefined();
+    expect((callbackCall?.params as { message?: string })?.message).toContain("status: error");
+    expect((callbackCall?.params as { message?: string })?.message).toContain("error: boom");
   });
 });

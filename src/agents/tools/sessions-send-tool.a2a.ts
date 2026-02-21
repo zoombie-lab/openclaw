@@ -3,139 +3,112 @@ import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
-import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
-import { resolveAnnounceTarget } from "./sessions-announce-target.js";
-import {
-  buildAgentToAgentAnnounceContext,
-  buildAgentToAgentReplyContext,
-  isAnnounceSkip,
-  isReplySkip,
-} from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
+const WAIT_POLL_TIMEOUT_MS = 60_000;
+const MAX_COMPLETION_WATCH_MS = 6 * 60 * 60_000;
+
+type RunCompletion = {
+  status: "ok" | "error" | "timeout";
+  error?: string;
+};
+
+async function waitForRunCompletion(runId: string): Promise<RunCompletion> {
+  const deadline = Date.now() + MAX_COMPLETION_WATCH_MS;
+  while (Date.now() < deadline) {
+    const remainingMs = deadline - Date.now();
+    const waitMs = Math.max(1, Math.min(WAIT_POLL_TIMEOUT_MS, remainingMs));
+    const wait = await callGateway<{ status?: string; error?: string }>({
+      method: "agent.wait",
+      params: {
+        runId,
+        timeoutMs: waitMs,
+      },
+      timeoutMs: waitMs + 2000,
+    });
+    if (wait?.status === "ok") {
+      return { status: "ok" };
+    }
+    if (wait?.status === "error") {
+      return { status: "error", error: wait.error };
+    }
+    if (wait?.status !== "timeout") {
+      return {
+        status: "error",
+        error: `unexpected wait status: ${String(wait?.status ?? "unknown")}`,
+      };
+    }
+  }
+  return {
+    status: "timeout",
+    error: "completion watcher timeout exceeded",
+  };
+}
+
+function buildCompletionCallbackMessage(params: {
+  runId: string;
+  displayKey: string;
+  completion: RunCompletion;
+}) {
+  const lines = [
+    "TASK_COMPLETE",
+    `runId: ${params.runId}`,
+    `targetSession: ${params.displayKey}`,
+    `status: ${params.completion.status}`,
+  ];
+  if (params.completion.error) {
+    lines.push(`error: ${params.completion.error}`);
+  }
+  return lines.join("\n");
+}
 
 export async function runSessionsSendA2AFlow(params: {
   targetSessionKey: string;
   displayKey: string;
-  message: string;
-  announceTimeoutMs: number;
-  maxPingPongTurns: number;
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
-  roundOneReply?: string;
   waitRunId?: string;
 }) {
-  const runContextId = params.waitRunId ?? "unknown";
+  const runId = params.waitRunId;
   try {
-    let primaryReply = params.roundOneReply;
-    let latestReply = params.roundOneReply;
-    if (!primaryReply && params.waitRunId) {
-      const waitMs = Math.min(params.announceTimeoutMs, 60_000);
-      const wait = await callGateway<{ status: string }>({
-        method: "agent.wait",
-        params: {
-          runId: params.waitRunId,
-          timeoutMs: waitMs,
-        },
-        timeoutMs: waitMs + 2000,
-      });
-      if (wait?.status === "ok") {
-        primaryReply = await readLatestAssistantReply({
-          sessionKey: params.targetSessionKey,
-        });
-        latestReply = primaryReply;
-      }
+    if (!runId) {
+      return;
     }
-    if (!latestReply) {
+    if (!params.requesterSessionKey || params.requesterSessionKey === params.targetSessionKey) {
       return;
     }
 
-    const announceTarget = await resolveAnnounceTarget({
-      sessionKey: params.targetSessionKey,
+    const completion = await waitForRunCompletion(runId);
+    const callbackMessage = buildCompletionCallbackMessage({
+      runId,
       displayKey: params.displayKey,
+      completion,
     });
-    const targetChannel = announceTarget?.channel ?? "unknown";
-
-    if (
-      params.maxPingPongTurns > 0 &&
-      params.requesterSessionKey &&
-      params.requesterSessionKey !== params.targetSessionKey
-    ) {
-      let currentSessionKey = params.requesterSessionKey;
-      let nextSessionKey = params.targetSessionKey;
-      let incomingMessage = latestReply;
-      for (let turn = 1; turn <= params.maxPingPongTurns; turn += 1) {
-        const currentRole =
-          currentSessionKey === params.requesterSessionKey ? "requester" : "target";
-        const replyPrompt = buildAgentToAgentReplyContext({
-          requesterSessionKey: params.requesterSessionKey,
-          requesterChannel: params.requesterChannel,
-          targetSessionKey: params.displayKey,
-          targetChannel,
-          currentRole,
-          turn,
-          maxTurns: params.maxPingPongTurns,
-        });
-        const replyText = await runAgentStep({
-          sessionKey: currentSessionKey,
-          message: incomingMessage,
-          extraSystemPrompt: replyPrompt,
-          timeoutMs: params.announceTimeoutMs,
-          lane: AGENT_LANE_NESTED,
-        });
-        if (!replyText || isReplySkip(replyText)) {
-          break;
-        }
-        latestReply = replyText;
-        incomingMessage = replyText;
-        const swap = currentSessionKey;
-        currentSessionKey = nextSessionKey;
-        nextSessionKey = swap;
-      }
-    }
-
-    const announcePrompt = buildAgentToAgentAnnounceContext({
-      requesterSessionKey: params.requesterSessionKey,
-      requesterChannel: params.requesterChannel,
-      targetSessionKey: params.displayKey,
-      targetChannel,
-      originalMessage: params.message,
-      roundOneReply: primaryReply,
-      latestReply,
+    await callGateway({
+      method: "agent",
+      params: {
+        message: callbackMessage,
+        sessionKey: params.requesterSessionKey,
+        idempotencyKey: crypto.randomUUID(),
+        deliver: false,
+        channel: INTERNAL_MESSAGE_CHANNEL,
+        lane: AGENT_LANE_NESTED,
+        extraSystemPrompt: [
+          "Task completion callback from sessions_send.",
+          params.requesterChannel ? `Requester channel: ${params.requesterChannel}.` : undefined,
+          `Target session: ${params.displayKey}.`,
+          "Acknowledge completion and decide if follow-up work is needed.",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      },
+      timeoutMs: 10_000,
     });
-    const announceReply = await runAgentStep({
-      sessionKey: params.targetSessionKey,
-      message: "Agent-to-agent announce step.",
-      extraSystemPrompt: announcePrompt,
-      timeoutMs: params.announceTimeoutMs,
-      lane: AGENT_LANE_NESTED,
-    });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
-      try {
-        await callGateway({
-          method: "send",
-          params: {
-            to: announceTarget.to,
-            message: announceReply.trim(),
-            channel: announceTarget.channel,
-            accountId: announceTarget.accountId,
-            idempotencyKey: crypto.randomUUID(),
-          },
-          timeoutMs: 10_000,
-        });
-      } catch (err) {
-        log.warn("sessions_send announce delivery failed", {
-          runId: runContextId,
-          channel: announceTarget.channel,
-          to: announceTarget.to,
-          error: formatErrorMessage(err),
-        });
-      }
-    }
   } catch (err) {
-    log.warn("sessions_send announce flow failed", {
-      runId: runContextId,
+    log.warn("sessions_send completion callback failed", {
+      runId: runId ?? "unknown",
       error: formatErrorMessage(err),
     });
   }

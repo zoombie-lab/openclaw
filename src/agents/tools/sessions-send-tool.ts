@@ -23,7 +23,7 @@ import {
   resolveSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -221,7 +221,6 @@ export function createSessionsSendTool(opts?: {
           ? Math.max(0, Math.floor(params.timeoutSeconds))
           : 30;
       const timeoutMs = timeoutSeconds * 1000;
-      const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
       const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
@@ -263,18 +262,13 @@ export function createSessionsSendTool(opts?: {
       };
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
-      const maxPingPongTurns = resolvePingPongTurns(cfg);
       const delivery = { status: "pending", mode: "announce" as const };
-      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+      const startA2AFlow = (waitRunId: string) => {
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,
-          message,
-          announceTimeoutMs,
-          maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,
-          roundOneReply,
           waitRunId,
         });
       };
@@ -289,7 +283,7 @@ export function createSessionsSendTool(opts?: {
           if (typeof response?.runId === "string" && response.runId) {
             runId = response.runId;
           }
-          startA2AFlow(undefined, runId);
+          startA2AFlow(runId);
           return jsonResult({
             runId,
             status: "accepted",
@@ -317,6 +311,7 @@ export function createSessionsSendTool(opts?: {
         if (typeof response?.runId === "string" && response.runId) {
           runId = response.runId;
         }
+        startA2AFlow(runId);
       } catch (err) {
         const messageText =
           err instanceof Error ? err.message : typeof err === "string" ? err : "error";
@@ -376,7 +371,6 @@ export function createSessionsSendTool(opts?: {
       const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
       const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
       const reply = last ? extractAssistantText(last) : undefined;
-      startA2AFlow(reply ?? undefined);
 
       return jsonResult({
         runId,
