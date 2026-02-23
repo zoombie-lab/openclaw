@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import {
+  type GatewayMessageChannel,
+  INTERNAL_MESSAGE_CHANNEL,
+} from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
@@ -92,11 +94,6 @@ export async function runSessionsSendA2AFlow(params: {
     }
 
     const completion = await waitForRunCompletion(runId);
-    const callbackChannel =
-      params.requesterChannel && params.requesterChannel !== INTERNAL_MESSAGE_CHANNEL
-        ? params.requesterChannel
-        : INTERNAL_MESSAGE_CHANNEL;
-    const callbackDeliver = callbackChannel !== INTERNAL_MESSAGE_CHANNEL;
     const callbackMessage = buildCompletionCallbackMessage({
       runId,
       displayKey: params.displayKey,
@@ -109,16 +106,13 @@ export async function runSessionsSendA2AFlow(params: {
         message: callbackMessage,
         sessionKey: params.requesterSessionKey,
         idempotencyKey: crypto.randomUUID(),
-        deliver: callbackDeliver,
-        channel: callbackChannel,
+        deliver: false,
+        channel: INTERNAL_MESSAGE_CHANNEL,
         lane: AGENT_LANE_NESTED,
         extraSystemPrompt: [
           "Task completion callback from sessions_send.",
           params.requesterChannel ? `Requester channel: ${params.requesterChannel}.` : undefined,
           `Target session: ${params.displayKey}.`,
-          callbackDeliver
-            ? "If this callback corresponds to a multi-specialist workflow, post a concise progress update and only send final synthesis after all required specialist sections are complete."
-            : undefined,
           "Acknowledge completion and decide if follow-up work is needed.",
         ]
           .filter(Boolean)

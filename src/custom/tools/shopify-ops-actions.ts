@@ -1,7 +1,6 @@
-import crypto from "node:crypto";
-import { Type } from "@sinclair/typebox";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-
+import { Type } from "@sinclair/typebox";
+import crypto from "node:crypto";
 import { stringEnum } from "../../agents/schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "../../agents/tools/common.js";
 
@@ -14,6 +13,7 @@ const SHOPIFY_OPS_ACTIONS = [
   "order-timeline",
   "refunds-metrics",
   "returns-metrics",
+  "chatbot-metrics",
   "ops-snapshot",
 ] as const;
 
@@ -71,7 +71,9 @@ export async function handleShopifyOpsAction(
   }
 
   const text = await res.text();
-  if (!text) return jsonResult({ ok: true });
+  if (!text) {
+    return jsonResult({ ok: true });
+  }
   try {
     return jsonResult(JSON.parse(text) as unknown);
   } catch {
@@ -84,7 +86,7 @@ export function createShopifyOpsTool(): AnyAgentTool {
     label: "Shopify Ops",
     name: "shopify_ops",
     description:
-      "Fetch Shopify metrics from ops-manager via signed requests. Pass an action plus its parameters (sales-analytics, inventory-analytics, fulfillment-velocity, refunds-metrics, returns-metrics, search-orders, product-inventory, order-timeline, ops-snapshot).",
+      "Fetch Shopify metrics from ops-manager via signed requests. Pass an action plus its parameters (sales-analytics, inventory-analytics, fulfillment-velocity, refunds-metrics, returns-metrics, chatbot-metrics, search-orders, product-inventory, order-timeline, ops-snapshot).",
     parameters: ShopifyOpsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
