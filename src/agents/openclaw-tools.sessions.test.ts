@@ -518,6 +518,61 @@ describe("sessions tools", () => {
     expect(sendCallCount).toBe(0);
   });
 
+  it("sessions_send callback is always internal (deliver:false) regardless of requester channel", async () => {
+    callGatewayMock.mockReset();
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    let agentCallCount = 0;
+    const requesterKey = "agent:main:main";
+    const targetKey = "agent:main:worker";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 4000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "webchat",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call7a", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+    expect(result.details).toMatchObject({ status: "accepted" });
+
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 2);
+    // No sessions.resolve or sessions.list lookups — callbacks are always internal
+    expect(calls.some((call) => call.method === "sessions.resolve")).toBe(false);
+    expect(calls.some((call) => call.method === "sessions.list")).toBe(false);
+
+    const callbackCall = calls
+      .filter((call) => call.method === "agent")
+      .find((call) => (call.params as { sessionKey?: string })?.sessionKey === requesterKey);
+    expect(callbackCall).toBeDefined();
+    expect(callbackCall?.params).toMatchObject({
+      channel: "webchat",
+      deliver: false,
+    });
+  });
+
   it("sessions_send resolves sessionId inputs", async () => {
     callGatewayMock.mockReset();
     const sessionId = "sess-send";

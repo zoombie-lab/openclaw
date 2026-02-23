@@ -12,6 +12,7 @@ import { sanitizeToolResultImages } from "./tool-images.js";
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
+const DEFAULT_TASK_QUEUE_ROOTS = ["/data/shared/tasks/queue"] as const;
 
 async function sniffMimeFromBase64(base64: string): Promise<string | undefined> {
   const trimmed = base64.trim();
@@ -106,6 +107,29 @@ function resolveReadPath(filePath: string, rootDir?: string): string {
     return filePath;
   }
   return path.resolve(rootDir ?? process.cwd(), filePath);
+}
+
+function resolveAbsolutePath(targetPath: string, cwd?: string): string {
+  return path.normalize(
+    path.isAbsolute(targetPath) ? targetPath : path.resolve(cwd ?? process.cwd(), targetPath),
+  );
+}
+
+function isWithinPath(targetPath: string, rootPath: string): boolean {
+  const relative = path.relative(rootPath, targetPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.stat(targetPath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 async function maybeDirectoryListingResult(params: {
@@ -403,6 +427,46 @@ export function wrapToolParamNormalization(
   };
 }
 
+export function wrapTaskQueueOverwriteGuard(
+  tool: AnyAgentTool,
+  options?: {
+    cwd?: string;
+    taskQueueRoots?: string[];
+  },
+): AnyAgentTool {
+  const queueRoots =
+    options?.taskQueueRoots && options.taskQueueRoots.length > 0
+      ? options.taskQueueRoots
+      : [...DEFAULT_TASK_QUEUE_ROOTS];
+  const resolvedQueueRoots = queueRoots.map((queueRoot) =>
+    resolveAbsolutePath(queueRoot, options?.cwd),
+  );
+
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const normalized = normalizeToolParams(args);
+      const record =
+        normalized ??
+        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      const filePath = typeof record?.path === "string" ? record.path.trim() : "";
+      if (filePath) {
+        const resolvedTargetPath = resolveAbsolutePath(filePath, options?.cwd);
+        const isTaskQueuePath = resolvedQueueRoots.some((queueRoot) =>
+          isWithinPath(resolvedTargetPath, queueRoot),
+        );
+        if (isTaskQueuePath && (await pathExists(resolvedTargetPath))) {
+          throw new Error(
+            `Refusing to overwrite existing task queue file via write (${filePath}). Use edit instead.`,
+          );
+        }
+      }
+
+      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+    },
+  };
+}
+
 function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return {
     ...tool,
@@ -427,7 +491,9 @@ export function createSandboxedReadTool(root: string) {
 
 export function createSandboxedWriteTool(root: string) {
   const base = createWriteTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write), root);
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  const guarded = wrapTaskQueueOverwriteGuard(normalized, { cwd: root });
+  return wrapSandboxPathGuard(guarded, root);
 }
 
 export function createSandboxedEditTool(root: string) {

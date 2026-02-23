@@ -41,6 +41,7 @@ import {
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
   wrapToolParamNormalization,
+  wrapTaskQueueOverwriteGuard,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import {
@@ -260,9 +261,11 @@ export function createOpenClawCodingTools(options?: {
         return [];
       }
       // Wrap with param normalization for Claude Code compatibility
-      return [
-        wrapToolParamNormalization(createWriteTool(workspaceRoot), CLAUDE_PARAM_GROUPS.write),
-      ];
+      const normalized = wrapToolParamNormalization(
+        createWriteTool(workspaceRoot),
+        CLAUDE_PARAM_GROUPS.write,
+      );
+      return [wrapTaskQueueOverwriteGuard(normalized, { cwd: workspaceRoot })];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
