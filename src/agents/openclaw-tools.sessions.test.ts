@@ -465,8 +465,8 @@ describe("sessions tools", () => {
     expect(callbackCalls).toHaveLength(2);
     for (const call of callbackCalls) {
       expect(call.params).toMatchObject({
-        channel: "discord",
-        deliver: true,
+        channel: "webchat",
+        deliver: false,
       });
     }
     const targetCalls = agentCalls.filter(
@@ -678,10 +678,66 @@ describe("sessions tools", () => {
     );
     expect(callbackCall).toBeDefined();
     expect(callbackCall?.params).toMatchObject({
-      channel: "discord",
-      deliver: true,
+      channel: "webchat",
+      deliver: false,
     });
     expect((callbackCall?.params as { message?: string })?.message).toContain("status: error");
     expect((callbackCall?.params as { message?: string })?.message).toContain("error: boom");
+  });
+
+  it("sessions_send routes callbacks to requester main session for agent-scoped requesters", async () => {
+    callGatewayMock.mockReset();
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    let agentCallCount = 0;
+    const requesterKey = "agent:ops:slack:channel:c1";
+    const requesterMainKey = "agent:ops:main";
+    const targetKey = "agent:ops:worker";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        return {
+          runId: `run-${agentCallCount}`,
+          status: "accepted",
+          acceptedAt: 5000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "slack",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call8", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+    expect(result.details).toMatchObject({ status: "accepted" });
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 2);
+
+    const callbackCall = calls
+      .filter((call) => call.method === "agent")
+      .find((call) => (call.params as { sessionKey?: string })?.sessionKey === requesterMainKey);
+    expect(callbackCall).toBeDefined();
+    expect(callbackCall?.params).toMatchObject({
+      deliver: false,
+      channel: "webchat",
+    });
+    expect(
+      calls
+        .filter((call) => call.method === "agent")
+        .some((call) => (call.params as { sessionKey?: string })?.sessionKey === requesterKey),
+    ).toBe(false);
   });
 });

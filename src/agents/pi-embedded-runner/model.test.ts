@@ -22,6 +22,7 @@ const makeModel = (id: string) => ({
 beforeEach(() => {
   vi.mocked(discoverModels).mockReturnValue({
     find: vi.fn(() => null),
+    getAll: vi.fn(() => []),
   } as unknown as ReturnType<typeof discoverModels>);
 });
 
@@ -211,6 +212,52 @@ describe("resolveModel", () => {
     const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: openai-codex/gpt-4.1-mini");
+  });
+
+  it("allows forward-compat model ids for vercel-ai-gateway", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "vercel-ai-gateway" && modelId === "deepseek/deepseek-v3.2") {
+          return {
+            id: "deepseek/deepseek-v3.2",
+            name: "DeepSeek V3.2",
+            provider: "vercel-ai-gateway",
+            api: "anthropic-messages",
+            baseUrl: "https://ai-gateway.vercel.sh",
+            reasoning: false,
+            input: ["text"] as const,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 163840,
+            maxTokens: 65536,
+          };
+        }
+        return null;
+      }),
+      getAll: vi.fn(() => [
+        {
+          id: "deepseek/deepseek-v3.2",
+          name: "DeepSeek V3.2",
+          provider: "vercel-ai-gateway",
+          api: "anthropic-messages",
+          baseUrl: "https://ai-gateway.vercel.sh",
+          reasoning: false,
+          input: ["text"] as const,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 163840,
+          maxTokens: 65536,
+        },
+      ]),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("vercel-ai-gateway", "google/gemini-3.1-pro-preview", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "vercel-ai-gateway",
+      id: "google/gemini-3.1-pro-preview",
+      api: "anthropic-messages",
+      baseUrl: "https://ai-gateway.vercel.sh",
+    });
   });
 
   it("uses codex fallback even when openai-codex provider is configured", () => {

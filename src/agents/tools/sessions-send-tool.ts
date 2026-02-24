@@ -2,10 +2,12 @@ import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
 import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
+  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
@@ -261,12 +263,27 @@ export function createSessionsSendTool(opts?: {
         extraSystemPrompt: agentMessageContext,
       };
       const requesterSessionKey = opts?.agentSessionKey;
+      const callbackSessionKey = (() => {
+        if (typeof requesterSessionKey !== "string") {
+          return undefined;
+        }
+        const trimmed = requesterSessionKey.trim();
+        if (!trimmed) {
+          return undefined;
+        }
+        const parsedRequester = parseAgentSessionKey(trimmed);
+        if (!parsedRequester) {
+          return trimmed;
+        }
+        return resolveAgentMainSessionKey({ cfg, agentId: parsedRequester.agentId });
+      })();
       const requesterChannel = opts?.agentChannel;
       const delivery = { status: "pending", mode: "announce" as const };
       const startA2AFlow = (waitRunId: string) => {
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,
+          callbackSessionKey,
           requesterSessionKey,
           requesterChannel,
           waitRunId,

@@ -28,6 +28,11 @@ const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
+const FORWARD_COMPAT_GATEWAY_PROVIDERS = new Set(["vercel-ai-gateway", "cloudflare-ai-gateway"]);
+
+function isForwardCompatGatewayProvider(provider: string): boolean {
+  return FORWARD_COMPAT_GATEWAY_PROVIDERS.has(normalizeProviderId(provider));
+}
 
 function resolveOpenAICodexGpt53FallbackModel(
   provider: string,
@@ -112,6 +117,36 @@ function resolveAnthropicOpus46ForwardCompatModel(
   }
 
   return undefined;
+}
+
+function resolveForwardCompatGatewayModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (!isForwardCompatGatewayProvider(provider)) {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  if (!trimmedModelId) {
+    return undefined;
+  }
+
+  const normalizedProvider = normalizeProviderId(provider);
+  const templates = modelRegistry.getAll() as Model<Api>[];
+  const template = templates.find(
+    (entry) => normalizeProviderId(String(entry?.provider ?? "")) === normalizedProvider,
+  );
+  if (!template) {
+    return undefined;
+  }
+
+  return normalizeModelCompat({
+    ...template,
+    id: trimmedModelId,
+    name: trimmedModelId,
+  } as Model<Api>);
 }
 
 export function buildInlineProviderModels(
@@ -199,8 +234,12 @@ export function resolveModel(
     if (anthropicForwardCompat) {
       return { model: anthropicForwardCompat, authStorage, modelRegistry };
     }
+    const gatewayForwardCompat = resolveForwardCompatGatewayModel(provider, modelId, modelRegistry);
+    if (gatewayForwardCompat) {
+      return { model: gatewayForwardCompat, authStorage, modelRegistry };
+    }
     const providerCfg = providers[provider];
-    if (providerCfg || modelId.startsWith("mock-")) {
+    if (providerCfg || modelId.startsWith("mock-") || isForwardCompatGatewayProvider(provider)) {
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
         name: modelId,

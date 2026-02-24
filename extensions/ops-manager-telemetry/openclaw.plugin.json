@@ -1,0 +1,8 @@
+{
+  "id": "ops-manager-telemetry",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

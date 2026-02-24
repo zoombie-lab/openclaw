@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -16,6 +17,14 @@ type RunCompletion = {
   status: "ok" | "error" | "timeout";
   error?: string;
 };
+
+type TaskCompletionState = {
+  allComplete: boolean;
+  totalSections: number;
+  completeSections: number;
+};
+
+const taskReadySignalDispatched = new Set<string>();
 
 function extractTaskPathFromMessage(message?: string): string | undefined {
   if (typeof message !== "string") {
@@ -76,9 +85,61 @@ function buildCompletionCallbackMessage(params: {
   return lines.filter((line): line is string => typeof line === "string").join("\n");
 }
 
+function evaluateSpecialistTaskCompletion(content: string): TaskCompletionState | undefined {
+  const startMatch = content.match(/^##\s+Specialist Findings\b.*$/im);
+  if (!startMatch || startMatch.index === undefined) {
+    return undefined;
+  }
+  const afterSpecialistsHeadingIndex = startMatch.index + startMatch[0].length;
+  const afterSpecialistsHeading = content.slice(afterSpecialistsHeadingIndex);
+  const nextLevelTwoHeading = afterSpecialistsHeading.match(/^##\s+/m);
+  const specialistBlock =
+    nextLevelTwoHeading && nextLevelTwoHeading.index !== undefined
+      ? afterSpecialistsHeading.slice(0, nextLevelTwoHeading.index)
+      : afterSpecialistsHeading;
+  const sectionBodies = specialistBlock.split(/^###\s+/m).slice(1);
+  if (sectionBodies.length === 0) {
+    return undefined;
+  }
+  let completeSections = 0;
+  for (const body of sectionBodies) {
+    if (/^\*\*Status:\*\*\s*Complete\b/im.test(body)) {
+      completeSections += 1;
+    }
+  }
+  return {
+    allComplete: completeSections === sectionBodies.length,
+    totalSections: sectionBodies.length,
+    completeSections,
+  };
+}
+
+async function readTaskCompletionState(taskPath: string): Promise<TaskCompletionState | undefined> {
+  const content = await fs.readFile(taskPath, "utf8");
+  return evaluateSpecialistTaskCompletion(content);
+}
+
+function buildTaskReadyForSynthesisMessage(params: {
+  taskPath: string;
+  runId: string;
+  displayKey: string;
+  completionState: TaskCompletionState;
+}) {
+  const lines = [
+    "TASK_READY_FOR_SYNTHESIS",
+    `runId: ${params.runId}`,
+    `taskFile: ${params.taskPath}`,
+    `targetSession: ${params.displayKey}`,
+    `completeSections: ${params.completionState.completeSections}/${params.completionState.totalSections}`,
+    "status: ready",
+  ];
+  return lines.join("\n");
+}
+
 export async function runSessionsSendA2AFlow(params: {
   targetSessionKey: string;
   displayKey: string;
+  callbackSessionKey?: string;
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
   waitRunId?: string;
@@ -89,22 +150,29 @@ export async function runSessionsSendA2AFlow(params: {
     if (!runId) {
       return;
     }
-    if (!params.requesterSessionKey || params.requesterSessionKey === params.targetSessionKey) {
+    const callbackSessionKey =
+      typeof params.callbackSessionKey === "string" && params.callbackSessionKey.trim()
+        ? params.callbackSessionKey.trim()
+        : typeof params.requesterSessionKey === "string" && params.requesterSessionKey.trim()
+          ? params.requesterSessionKey.trim()
+          : undefined;
+    if (!callbackSessionKey || callbackSessionKey === params.targetSessionKey) {
       return;
     }
 
     const completion = await waitForRunCompletion(runId);
+    const taskPath = extractTaskPathFromMessage(params.sourceMessage);
     const callbackMessage = buildCompletionCallbackMessage({
       runId,
       displayKey: params.displayKey,
       completion,
-      taskPath: extractTaskPathFromMessage(params.sourceMessage),
+      taskPath,
     });
     await callGateway({
       method: "agent",
       params: {
         message: callbackMessage,
-        sessionKey: params.requesterSessionKey,
+        sessionKey: callbackSessionKey,
         idempotencyKey: crypto.randomUUID(),
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
@@ -112,11 +180,51 @@ export async function runSessionsSendA2AFlow(params: {
         extraSystemPrompt: [
           "Task completion callback from sessions_send.",
           params.requesterChannel ? `Requester channel: ${params.requesterChannel}.` : undefined,
+          params.requesterSessionKey
+            ? `Original requester session: ${params.requesterSessionKey}.`
+            : undefined,
+          `Callback target session: ${callbackSessionKey}.`,
           `Target session: ${params.displayKey}.`,
           "Acknowledge completion and decide if follow-up work is needed.",
         ]
           .filter(Boolean)
           .join("\n"),
+      },
+      timeoutMs: 10_000,
+    });
+
+    if (completion.status !== "ok" || !taskPath) {
+      return;
+    }
+    const completionState = await readTaskCompletionState(taskPath).catch(() => undefined);
+    if (!completionState?.allComplete) {
+      return;
+    }
+    const signalKey = `${callbackSessionKey}::${taskPath}`;
+    if (taskReadySignalDispatched.has(signalKey)) {
+      return;
+    }
+    taskReadySignalDispatched.add(signalKey);
+    const taskReadyMessage = buildTaskReadyForSynthesisMessage({
+      taskPath,
+      runId,
+      displayKey: params.displayKey,
+      completionState,
+    });
+    await callGateway({
+      method: "agent",
+      params: {
+        message: taskReadyMessage,
+        sessionKey: callbackSessionKey,
+        idempotencyKey: crypto.randomUUID(),
+        deliver: false,
+        channel: INTERNAL_MESSAGE_CHANNEL,
+        lane: AGENT_LANE_NESTED,
+        extraSystemPrompt: [
+          "Deterministic orchestration signal from sessions_send.",
+          "All specialist sections in the task file are marked Status: Complete.",
+          "Re-read the task file now, write synthesis if missing, send final report if required, then archive the task.",
+        ].join("\n"),
       },
       timeoutMs: 10_000,
     });
