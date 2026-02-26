@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -23,6 +23,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 import "./test-helpers/fast-core-tools.js";
 import { sleep } from "../utils.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { resetSessionsSendA2ARegistryForTests } from "./sessions-send-a2a-registry.js";
 
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
   const start = Date.now();
@@ -35,6 +36,10 @@ const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2
 };
 
 describe("sessions tools", () => {
+  beforeEach(() => {
+    resetSessionsSendA2ARegistryForTests();
+  });
+
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
     const tools = createOpenClawTools();
     const byName = (name: string) => {
