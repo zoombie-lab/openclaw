@@ -10,6 +10,22 @@ import { listEnabledSlackAccounts } from "../../slack/accounts.js";
 import { resolveSlackChannelId } from "../../slack/targets.js";
 
 export function createSlackActions(providerId: string): ChannelMessageActionAdapter {
+  const parseBooleanParam = (value: unknown): boolean | undefined => {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "true" || normalized === "1" || normalized === "yes") {
+        return true;
+      }
+      if (normalized === "false" || normalized === "0" || normalized === "no") {
+        return false;
+      }
+    }
+    return undefined;
+  };
+
   return {
     listActions: ({ cfg }) => {
       const accounts = listEnabledSlackAccounts(cfg).filter(
@@ -42,6 +58,7 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
         actions.add("read");
         actions.add("edit");
         actions.add("delete");
+        actions.add("channel-create");
       }
       if (isActionEnabled("pins")) {
         actions.add("pin");
@@ -213,6 +230,27 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
         return await handleSlackAction(
           { action: "emojiList", accountId: accountId ?? undefined },
           cfg,
+        );
+      }
+
+      if (action === "channel-create") {
+        const name = readStringParam(params, "name", { required: true });
+        const isPrivate = parseBooleanParam(params.isPrivate) ?? false;
+        const fallbackTo = readStringParam(params, "fallbackTo");
+        const fallbackMessage = readStringParam(params, "fallbackMessage", {
+          allowEmpty: true,
+        });
+        return await handleSlackAction(
+          {
+            action: "createChannel",
+            name,
+            isPrivate,
+            fallbackTo: fallbackTo ?? undefined,
+            fallbackMessage: fallbackMessage ?? undefined,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+          toolContext,
         );
       }
 

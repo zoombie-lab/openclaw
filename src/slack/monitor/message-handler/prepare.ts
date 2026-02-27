@@ -200,24 +200,6 @@ export async function prepareSlackMessage(params: {
   });
 
   const baseSessionKey = route.sessionKey;
-  const replyToChatType = isDirectMessage
-    ? "direct"
-    : resolvedChannelType === "channel"
-      ? "channel"
-      : "group";
-  const replyToMode = resolveSlackReplyToMode(account, replyToChatType);
-  const threadContext = resolveSlackThreadContext({ message, replyToMode });
-  const threadTs = threadContext.incomingThreadTs;
-  const isThreadReply = threadContext.isThreadReply;
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId: isThreadReply ? threadTs : undefined,
-    parentSessionKey: isThreadReply && ctx.threadInheritParent ? baseSessionKey : undefined,
-  });
-  const sessionKey = threadKeys.sessionKey;
-  const historyKey =
-    isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
-
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
   const explicitlyMentioned = Boolean(
@@ -235,6 +217,27 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
+
+  const replyToChatType = isDirectMessage
+    ? "direct"
+    : resolvedChannelType === "channel"
+      ? "channel"
+      : "group";
+  const replyToMode = resolveSlackReplyToMode(account, replyToChatType);
+  const threadContext = resolveSlackThreadContext({ message, replyToMode });
+  const threadTs = threadContext.incomingThreadTs;
+  const messageTs = threadContext.messageTs;
+  const isThreadReply = threadContext.isThreadReply;
+  const isTopLevelMention = !isDirectMessage && !isThreadReply && wasMentioned;
+  const threadIdForSession = isThreadReply ? threadTs : isTopLevelMention ? messageTs : undefined;
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey,
+    threadId: threadIdForSession,
+    parentSessionKey: isThreadReply && ctx.threadInheritParent ? baseSessionKey : undefined,
+  });
+  const sessionKey = threadKeys.sessionKey;
+  const historyKey =
+    threadIdForSession && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
   const implicitMention = Boolean(
     !isDirectMessage &&
     ctx.botUserId &&
@@ -582,7 +585,7 @@ export async function prepareSlackMessage(params: {
     MessageSid: message.ts,
     ReplyToId: threadContext.replyToId,
     // Preserve thread context for routed tool notifications.
-    MessageThreadId: threadContext.messageThreadId,
+    MessageThreadId: threadIdForSession ?? threadContext.messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,

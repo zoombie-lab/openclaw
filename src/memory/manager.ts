@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -16,8 +17,15 @@ import type {
 } from "./types.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import {
+  loadSessionStore,
+  resolveSessionFilePath,
+  resolveSessionHistoryDir,
+  resolveStorePath,
+} from "../config/sessions.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
 import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
@@ -113,6 +121,7 @@ export class MemoryIndexManager implements MemorySearchManager {
   private readonly cacheKey: string;
   private readonly cfg: OpenClawConfig;
   private readonly agentId: string;
+  private readonly normalizedAgentId: string;
   private readonly workspaceDir: string;
   private readonly settings: ResolvedMemorySearchConfig;
   private provider: EmbeddingProvider;
@@ -214,6 +223,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     this.cacheKey = params.cacheKey;
     this.cfg = params.cfg;
     this.agentId = params.agentId;
+    this.normalizedAgentId = normalizeAgentId(params.agentId);
     this.workspaceDir = params.workspaceDir;
     this.settings = params.settings;
     this.provider = params.providerResult.provider;
@@ -245,6 +255,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     this.ensureSessionListener();
     this.ensureIntervalSync();
     this.dirty = this.sources.has("memory");
+    this.sessionsDirty = this.sources.has("sessions");
     this.batch = this.resolveBatchConfig();
   }
 
@@ -855,7 +866,12 @@ export class MemoryIndexManager implements MemorySearchManager {
         return;
       }
       const sessionFile = update.sessionFile;
-      if (!this.isSessionFileForAgent(sessionFile)) {
+      const updateAgentId = update.agentId?.trim();
+      if (updateAgentId) {
+        if (normalizeAgentId(updateAgentId) !== this.normalizedAgentId) {
+          return;
+        }
+      } else if (!this.isSessionFileForAgent(sessionFile)) {
         return;
       }
       this.scheduleSessionDirty(sessionFile);
@@ -1015,9 +1031,14 @@ export class MemoryIndexManager implements MemorySearchManager {
       return false;
     }
     const sessionsDir = resolveSessionTranscriptsDirForAgent(this.agentId);
+    const historyDir = resolveSessionHistoryDir();
     const resolvedFile = path.resolve(sessionFile);
     const resolvedDir = path.resolve(sessionsDir);
-    return resolvedFile.startsWith(`${resolvedDir}${path.sep}`);
+    const resolvedHistoryDir = path.resolve(historyDir);
+    return (
+      resolvedFile.startsWith(`${resolvedDir}${path.sep}`) ||
+      resolvedFile.startsWith(`${resolvedHistoryDir}${path.sep}`)
+    );
   }
 
   private ensureIntervalSync() {
@@ -1065,7 +1086,14 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (needsFullReindex) {
       return true;
     }
-    return this.sessionsDirty && this.sessionsDirtyFiles.size > 0;
+    if (this.sessionsDirty && this.sessionsDirtyFiles.size > 0) {
+      return true;
+    }
+    // Bootstrap session indexing once when sessions source is enabled.
+    if (this.sessionsDirty && reason === "search") {
+      return true;
+    }
+    return false;
   }
 
   private async syncMemoryFiles(params: {
@@ -1546,21 +1574,79 @@ export class MemoryIndexManager implements MemorySearchManager {
   }
 
   private async listSessionFiles(): Promise<string[]> {
+    const files = new Set<string>();
+    const addJsonlCandidate = (candidate?: string) => {
+      const trimmed = candidate?.trim();
+      if (!trimmed || !trimmed.endsWith(".jsonl")) {
+        return;
+      }
+      files.add(path.resolve(trimmed));
+    };
+
+    // Legacy transcript location: ~/.openclaw/agents/<agent>/sessions/*.jsonl
     const dir = resolveSessionTranscriptsDirForAgent(this.agentId);
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
-      return entries
-        .filter((entry) => entry.isFile())
-        .map((entry) => entry.name)
-        .filter((name) => name.endsWith(".jsonl"))
-        .map((name) => path.join(dir, name));
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+          continue;
+        }
+        addJsonlCandidate(path.join(dir, entry.name));
+      }
     } catch {
-      return [];
+      // ignore
     }
+
+    // Current transcript location can live under ~/.openclaw/workspace/history/...
+    // Resolve from this agent's session store so we index the exact transcript file used.
+    try {
+      const storePath = resolveStorePath(this.cfg.session?.store, { agentId: this.agentId });
+      const store = loadSessionStore(storePath);
+      for (const value of Object.values(store)) {
+        if (!value || typeof value !== "object") {
+          continue;
+        }
+        const entry = value as SessionEntry;
+        addJsonlCandidate(entry.sessionFile);
+        if (entry.sessionId?.trim()) {
+          addJsonlCandidate(
+            resolveSessionFilePath(entry.sessionId, entry, { agentId: this.agentId }),
+          );
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const existing: string[] = [];
+    for (const filePath of files) {
+      try {
+        const stat = await fs.stat(filePath);
+        if (stat.isFile()) {
+          existing.push(filePath);
+        }
+      } catch {
+        // ignore missing paths
+      }
+    }
+    return existing;
   }
 
   private sessionPathForFile(absPath: string): string {
-    return path.join("sessions", path.basename(absPath)).replace(/\\/g, "/");
+    const sessionsDir = path.resolve(resolveSessionTranscriptsDirForAgent(this.agentId));
+    const historyDir = path.resolve(resolveSessionHistoryDir());
+    const resolved = path.resolve(absPath);
+    if (resolved.startsWith(`${sessionsDir}${path.sep}`)) {
+      return path
+        .join("sessions", "legacy", path.relative(sessionsDir, resolved))
+        .replace(/\\/g, "/");
+    }
+    if (resolved.startsWith(`${historyDir}${path.sep}`)) {
+      return path
+        .join("sessions", "history", path.relative(historyDir, resolved))
+        .replace(/\\/g, "/");
+    }
+    return path.join("sessions", path.basename(resolved)).replace(/\\/g, "/");
   }
 
   private normalizeSessionText(value: string): string {

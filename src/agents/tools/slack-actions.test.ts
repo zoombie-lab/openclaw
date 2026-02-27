@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { handleSlackAction } from "./slack-actions.js";
 
 const deleteSlackMessage = vi.fn(async () => ({}));
+const createSlackChannel = vi.fn(async () => ({}));
 const editSlackMessage = vi.fn(async () => ({}));
 const getSlackMemberInfo = vi.fn(async () => ({}));
 const listSlackEmojis = vi.fn(async () => ({}));
@@ -17,6 +18,7 @@ const sendSlackMessage = vi.fn(async () => ({}));
 const unpinSlackMessage = vi.fn(async () => ({}));
 
 vi.mock("../../slack/actions.js", () => ({
+  createSlackChannel: (...args: unknown[]) => createSlackChannel(...args),
   deleteSlackMessage: (...args: unknown[]) => deleteSlackMessage(...args),
   editSlackMessage: (...args: unknown[]) => editSlackMessage(...args),
   getSlackMemberInfo: (...args: unknown[]) => getSlackMemberInfo(...args),
@@ -431,5 +433,96 @@ describe("handleSlackAction", () => {
     await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
     const [, , opts] = sendSlackMessage.mock.calls[0] ?? [];
     expect(opts?.token).toBe("xoxp-1");
+  });
+
+  it("creates a channel", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    createSlackChannel.mockClear();
+    createSlackChannel.mockResolvedValueOnce({
+      channelId: "C_REPORTS",
+      name: "freddy-reports",
+      isPrivate: false,
+      created: true,
+    });
+
+    const result = await handleSlackAction(
+      {
+        action: "createChannel",
+        name: "Freddy-Reports",
+      },
+      cfg,
+    );
+    expect(createSlackChannel).toHaveBeenCalledWith("Freddy-Reports", { isPrivate: false });
+    expect((result.details as { result?: { channelId?: string } }).result?.channelId).toBe(
+      "C_REPORTS",
+    );
+  });
+
+  it("falls back to DM when createChannel fails and fallbackTo is provided", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    createSlackChannel.mockClear();
+    sendSlackMessage.mockClear();
+    createSlackChannel.mockRejectedValueOnce(new Error("restricted_action"));
+    sendSlackMessage.mockResolvedValueOnce({
+      messageId: "123.456",
+      channelId: "D_FALLBACK",
+    });
+
+    const result = await handleSlackAction(
+      {
+        action: "createChannel",
+        name: "Freddy-Reports",
+        fallbackTo: "user:U123",
+      },
+      cfg,
+    );
+
+    expect(createSlackChannel).toHaveBeenCalledWith("Freddy-Reports", { isPrivate: false });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "user:U123",
+      "I couldn't create channel \"Freddy-Reports\" in Slack, so I'm sending updates here instead.",
+      {},
+    );
+    const details = result.details as {
+      result?: { fallbackUsed?: boolean; fallbackTo?: string; createError?: string };
+    };
+    expect(details.result?.fallbackUsed).toBe(true);
+    expect(details.result?.fallbackTo).toBe("user:U123");
+    expect(details.result?.createError).toContain("restricted_action");
+  });
+
+  it("falls back to current app DM chat when createChannel fails and fallbackTo is not provided", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    createSlackChannel.mockClear();
+    sendSlackMessage.mockClear();
+    createSlackChannel.mockRejectedValueOnce(new Error("restricted_action"));
+    sendSlackMessage.mockResolvedValueOnce({
+      messageId: "123.456",
+      channelId: "D_APP",
+    });
+
+    const result = await handleSlackAction(
+      {
+        action: "createChannel",
+        name: "Freddy-Reports",
+      },
+      cfg,
+      {
+        currentChannelId: "D_APP",
+        currentThreadTs: "171234.567",
+      },
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "channel:D_APP",
+      "I couldn't create channel \"Freddy-Reports\" in Slack, so I'm sending updates here instead.",
+      { threadTs: "171234.567" },
+    );
+    const details = result.details as {
+      result?: { fallbackUsed?: boolean; fallbackTo?: string; createError?: string };
+    };
+    expect(details.result?.fallbackUsed).toBe(true);
+    expect(details.result?.fallbackTo).toBe("channel:D_APP");
+    expect(details.result?.createError).toContain("restricted_action");
   });
 });

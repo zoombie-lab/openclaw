@@ -113,6 +113,7 @@ function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>)
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
+    agentId?: string;
     /**
      * Optional, synchronous transform applied to toolResult messages *before* they are
      * persisted to the session transcript.
@@ -218,7 +219,7 @@ export function installSessionToolResultGuard(
       sessionManager as { getSessionFile?: () => string | null }
     ).getSessionFile?.();
     if (sessionFile) {
-      emitSessionTranscriptUpdate(sessionFile);
+      emitSessionTranscriptUpdate(sessionFile, opts?.agentId);
     }
 
     if (toolCalls.length > 0) {

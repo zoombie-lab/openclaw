@@ -31,6 +31,13 @@ export type SlackPin = {
   file?: { id?: string; name?: string };
 };
 
+export type SlackCreateChannelResult = {
+  channelId: string;
+  name: string;
+  isPrivate: boolean;
+  created: boolean;
+};
+
 function resolveToken(explicit?: string, accountId?: string) {
   const cfg = loadConfig();
   const account = resolveSlackAccount({ cfg, accountId });
@@ -57,6 +64,89 @@ function normalizeEmoji(raw: string) {
 async function getClient(opts: SlackActionClientOpts = {}) {
   const token = resolveToken(opts.token, opts.accountId);
   return opts.client ?? createSlackWebClient(token);
+}
+
+function normalizeSlackChannelName(raw: string): string {
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(/^#/, "")
+    .replace(/[\s.]+/g, "-")
+    .replace(/[^a-z0-9_-]/g, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!normalized) {
+    throw new Error("Slack channel name is required");
+  }
+  const clamped = normalized.slice(0, 80);
+  if (!clamped) {
+    throw new Error("Slack channel name is required");
+  }
+  return clamped;
+}
+
+function extractSlackErrorCode(err: unknown): string | undefined {
+  const candidate = err as { data?: { error?: unknown }; error?: unknown };
+  const fromData = candidate?.data?.error;
+  if (typeof fromData === "string" && fromData.trim()) {
+    return fromData.trim();
+  }
+  if (typeof candidate?.error === "string" && candidate.error.trim()) {
+    return candidate.error.trim();
+  }
+  return undefined;
+}
+
+type SlackListResponse = {
+  channels?: Array<{
+    id?: string;
+    name?: string;
+    is_archived?: boolean;
+    is_private?: boolean;
+  }>;
+  response_metadata?: { next_cursor?: string };
+};
+
+async function findSlackChannelByName(
+  client: WebClient,
+  name: string,
+  isPrivate: boolean,
+): Promise<{ id: string; name: string; isPrivate: boolean } | null> {
+  let cursor: string | undefined;
+  do {
+    const result = (await client.conversations.list({
+      types: "public_channel,private_channel",
+      exclude_archived: false,
+      limit: 1000,
+      cursor,
+    })) as SlackListResponse;
+
+    for (const channel of result.channels ?? []) {
+      const channelName = channel.name?.trim().toLowerCase();
+      if (!channelName || channelName !== name) {
+        continue;
+      }
+      const channelId = channel.id?.trim();
+      if (!channelId) {
+        continue;
+      }
+      const candidate = {
+        id: channelId,
+        name: channelName,
+        isPrivate: Boolean(channel.is_private),
+      };
+      if (candidate.isPrivate !== isPrivate) {
+        continue;
+      }
+      if (!channel.is_archived) {
+        return candidate;
+      }
+    }
+
+    const next = result.response_metadata?.next_cursor?.trim();
+    cursor = next ? next : undefined;
+  } while (cursor);
+  return null;
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -260,4 +350,44 @@ export async function listSlackPins(
   const client = await getClient(opts);
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
+}
+
+export async function createSlackChannel(
+  name: string,
+  opts: SlackActionClientOpts & { isPrivate?: boolean } = {},
+): Promise<SlackCreateChannelResult> {
+  const client = await getClient(opts);
+  const normalizedName = normalizeSlackChannelName(name);
+  const isPrivate = Boolean(opts.isPrivate);
+  try {
+    const result = await client.conversations.create({
+      name: normalizedName,
+      is_private: isPrivate,
+    });
+    const channelId = result.channel?.id?.trim();
+    if (!channelId) {
+      throw new Error("Slack create channel returned no channel id");
+    }
+    return {
+      channelId,
+      name: result.channel?.name?.trim() || normalizedName,
+      isPrivate: Boolean(result.channel?.is_private ?? isPrivate),
+      created: true,
+    };
+  } catch (err) {
+    const errorCode = extractSlackErrorCode(err);
+    if (errorCode !== "name_taken") {
+      throw err;
+    }
+    const existing = await findSlackChannelByName(client, normalizedName, isPrivate);
+    if (!existing) {
+      throw err;
+    }
+    return {
+      channelId: existing.id,
+      name: existing.name,
+      isPrivate: existing.isPrivate,
+      created: false,
+    };
+  }
 }

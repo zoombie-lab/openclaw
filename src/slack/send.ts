@@ -72,12 +72,121 @@ function parseRecipient(raw: string): SlackRecipient {
   return { kind: target.kind, id: target.id };
 }
 
+function isLikelySlackChannelId(raw: string): boolean {
+  const trimmed = raw.trim();
+  return /^[CDG][A-Z0-9]{8,}$/i.test(trimmed);
+}
+
+function normalizeSlackChannelName(raw: string): string {
+  let candidate = raw.trim();
+  if (!candidate) {
+    throw new Error("Slack channel name is required");
+  }
+  if (candidate.toLowerCase().startsWith("channel-name:")) {
+    candidate = candidate.slice("channel-name:".length).trim();
+  } else if (candidate.toLowerCase().startsWith("name:")) {
+    candidate = candidate.slice("name:".length).trim();
+  }
+  const normalized = candidate
+    .toLowerCase()
+    .replace(/^#/, "")
+    .replace(/[\s.]+/g, "-")
+    .replace(/[^a-z0-9_-]/g, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!normalized) {
+    throw new Error("Slack channel name is required");
+  }
+  return normalized.slice(0, 80);
+}
+
+function extractSlackErrorCode(err: unknown): string | undefined {
+  const candidate = err as { data?: { error?: unknown }; error?: unknown };
+  const fromData = candidate?.data?.error;
+  if (typeof fromData === "string" && fromData.trim()) {
+    return fromData.trim();
+  }
+  if (typeof candidate?.error === "string" && candidate.error.trim()) {
+    return candidate.error.trim();
+  }
+  return undefined;
+}
+
+type SlackListResponse = {
+  channels?: Array<{
+    id?: string;
+    name?: string;
+    is_archived?: boolean;
+  }>;
+  response_metadata?: { next_cursor?: string };
+};
+
+async function findChannelByName(client: WebClient, name: string): Promise<string | null> {
+  let cursor: string | undefined;
+  let archivedMatch: string | null = null;
+  do {
+    const result = (await client.conversations.list({
+      types: "public_channel",
+      exclude_archived: false,
+      limit: 1000,
+      cursor,
+    })) as SlackListResponse;
+    for (const channel of result.channels ?? []) {
+      const channelName = channel.name?.trim().toLowerCase();
+      const channelId = channel.id?.trim();
+      if (!channelName || !channelId || channelName !== name) {
+        continue;
+      }
+      if (!channel.is_archived) {
+        return channelId;
+      }
+      archivedMatch = archivedMatch ?? channelId;
+    }
+    const next = result.response_metadata?.next_cursor?.trim();
+    cursor = next ? next : undefined;
+  } while (cursor);
+  return archivedMatch;
+}
+
+async function resolveChannelIdForTarget(
+  client: WebClient,
+  channelTarget: string,
+): Promise<string> {
+  const trimmed = channelTarget.trim();
+  if (isLikelySlackChannelId(trimmed)) {
+    return trimmed;
+  }
+  const channelName = normalizeSlackChannelName(trimmed);
+  try {
+    const created = await client.conversations.create({
+      name: channelName,
+      is_private: false,
+    });
+    const createdId = created.channel?.id?.trim();
+    if (createdId) {
+      return createdId;
+    }
+  } catch (err) {
+    const code = extractSlackErrorCode(err);
+    if (code !== "name_taken") {
+      // Fall through to lookup; if it doesn't exist we'll rethrow a clearer error below.
+    }
+  }
+  const existingId = await findChannelByName(client, channelName);
+  if (existingId) {
+    return existingId;
+  }
+  throw new Error(
+    `Slack channel "${channelName}" could not be resolved. Use channel:<id> or allow channel creation.`,
+  );
+}
+
 async function resolveChannelId(
   client: WebClient,
   recipient: SlackRecipient,
 ): Promise<{ channelId: string; isDm?: boolean }> {
   if (recipient.kind === "channel") {
-    return { channelId: recipient.id };
+    return { channelId: await resolveChannelIdForTarget(client, recipient.id) };
   }
   const response = await client.conversations.open({ users: recipient.id });
   const channelId = response.channel?.id;

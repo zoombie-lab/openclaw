@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { slackPlugin } from "../../extensions/slack/src/channel.js";
+import { setSlackRuntime } from "../../extensions/slack/src/runtime.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
@@ -658,6 +660,104 @@ describe("runHeartbeatOnce", () => {
       });
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+    } finally {
+      replySpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists dedupe state when fallback Slack DM delivery succeeds", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const runtime = createPluginRuntime();
+      setSlackRuntime(runtime);
+      setTelegramRuntime(runtime);
+      setWhatsAppRuntime(runtime);
+      setActivePluginRegistry(
+        createTestRegistry([
+          { pluginId: "slack", plugin: slackPlugin, source: "test" },
+          { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+          { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+        ]),
+      );
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "slack",
+              to: "C_PRIMARY",
+            },
+          },
+        },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "slack",
+              lastTo: "channel:D_FALLBACK",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      replySpy.mockResolvedValue({ text: "Final alert" });
+      const sendSlack = vi.fn(async (to: string) => {
+        if (to === "C_PRIMARY") {
+          throw new Error("primary-down");
+        }
+        return { messageId: "m1", channelId: "D_FALLBACK" };
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendSlack,
+          getQueueSize: () => 0,
+          nowMs: () => 1_000,
+        },
+      });
+
+      expect(sendSlack).toHaveBeenCalledTimes(2);
+      expect(sendSlack).toHaveBeenNthCalledWith(1, "C_PRIMARY", "Final alert", expect.any(Object));
+      expect(sendSlack).toHaveBeenNthCalledWith(
+        2,
+        "channel:D_FALLBACK",
+        "Final alert",
+        expect.any(Object),
+      );
+
+      const storeAfterFallback = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { lastHeartbeatText?: string; lastHeartbeatSentAt?: number }
+      >;
+      expect(storeAfterFallback[sessionKey]?.lastHeartbeatText).toBe("Final alert");
+      expect(storeAfterFallback[sessionKey]?.lastHeartbeatSentAt).toBe(1_000);
+
+      sendSlack.mockClear();
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendSlack,
+          getQueueSize: () => 0,
+          nowMs: () => 2_000,
+        },
+      });
+
+      expect(sendSlack).not.toHaveBeenCalled();
     } finally {
       replySpy.mockRestore();
       await fs.rm(tmpDir, { recursive: true, force: true });

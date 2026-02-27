@@ -31,7 +31,6 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveStorePath,
-  saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -39,6 +38,7 @@ import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { parseSlackTarget } from "../slack/targets.js";
 import { formatErrorMessage } from "./errors.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
@@ -102,6 +102,21 @@ const EXEC_EVENT_PROMPT =
 const CRON_EVENT_PROMPT =
   "A scheduled reminder has been triggered. The reminder message is shown in the system messages above. " +
   "Please relay this reminder to the user in a helpful and friendly way.";
+
+function resolveSlackAppDmFallbackTarget(lastTo: unknown): string | undefined {
+  if (typeof lastTo !== "string" || !lastTo.trim()) {
+    return undefined;
+  }
+  const parsed = parseSlackTarget(lastTo.trim(), { defaultKind: "channel" });
+  if (!parsed || parsed.kind !== "channel") {
+    return undefined;
+  }
+  const channelId = parsed.id.trim();
+  if (!channelId.toUpperCase().startsWith("D")) {
+    return undefined;
+  }
+  return `channel:${channelId}`;
+}
 
 function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
   const trimmed = raw?.trim();
@@ -463,6 +478,29 @@ async function restoreHeartbeatUpdatedAt(params: {
   });
 }
 
+async function persistLastHeartbeatDedupe(params: {
+  storePath: string;
+  sessionKey: string;
+  text: string;
+  sentAt: number;
+}) {
+  const { storePath, sessionKey, text, sentAt } = params;
+  if (!text.trim()) {
+    return;
+  }
+  await updateSessionStore(storePath, (nextStore) => {
+    const current = nextStore[sessionKey];
+    if (!current) {
+      return;
+    }
+    nextStore[sessionKey] = {
+      ...current,
+      lastHeartbeatText: text,
+      lastHeartbeatSentAt: sentAt,
+    };
+  });
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
@@ -800,37 +838,79 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
-    await deliverOutboundPayloads({
-      cfg,
-      channel: delivery.channel,
-      to: delivery.to,
-      accountId: deliveryAccountId,
-      payloads: [
-        ...reasoningPayloads,
-        ...(shouldSkipMain
-          ? []
-          : [
-              {
-                text: normalized.text,
-                mediaUrls,
-              },
-            ]),
-      ],
-      deps: opts.deps,
-    });
+    const payloads = [
+      ...reasoningPayloads,
+      ...(shouldSkipMain
+        ? []
+        : [
+            {
+              text: normalized.text,
+              mediaUrls,
+            },
+          ]),
+    ];
+
+    try {
+      await deliverOutboundPayloads({
+        cfg,
+        channel: delivery.channel,
+        to: delivery.to,
+        accountId: deliveryAccountId,
+        payloads,
+        deps: opts.deps,
+      });
+    } catch (sendErr) {
+      const fallbackTo =
+        delivery.channel === "slack" && entry?.lastChannel === "slack"
+          ? resolveSlackAppDmFallbackTarget(entry.lastTo)
+          : undefined;
+      const canFallback = Boolean(fallbackTo && fallbackTo !== delivery.to);
+      if (!canFallback) {
+        throw sendErr;
+      }
+      log.warn("heartbeat: primary delivery failed; falling back to last Slack app DM", {
+        error: formatErrorMessage(sendErr),
+        primaryTo: delivery.to,
+        fallbackTo,
+      });
+      await deliverOutboundPayloads({
+        cfg,
+        channel: "slack",
+        to: fallbackTo!,
+        accountId: deliveryAccountId,
+        payloads,
+        deps: opts.deps,
+      });
+      if (!shouldSkipMain) {
+        await persistLastHeartbeatDedupe({
+          storePath,
+          sessionKey,
+          text: normalized.text,
+          sentAt: startedAt,
+        });
+      }
+      emitHeartbeatEvent({
+        status: "sent",
+        to: fallbackTo!,
+        preview: previewText?.slice(0, 200),
+        durationMs: Date.now() - startedAt,
+        hasMedia: mediaUrls.length > 0,
+        channel: "slack",
+        accountId: delivery.accountId,
+        reason: "fallback-last-app-dm",
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      });
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
 
     // Record last delivered heartbeat payload for dedupe.
-    if (!shouldSkipMain && normalized.text.trim()) {
-      const store = loadSessionStore(storePath);
-      const current = store[sessionKey];
-      if (current) {
-        store[sessionKey] = {
-          ...current,
-          lastHeartbeatText: normalized.text,
-          lastHeartbeatSentAt: startedAt,
-        };
-        await saveSessionStore(storePath, store);
-      }
+    if (!shouldSkipMain) {
+      await persistLastHeartbeatDedupe({
+        storePath,
+        sessionKey,
+        text: normalized.text,
+        sentAt: startedAt,
+      });
     }
 
     emitHeartbeatEvent({

@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import {
+  createSlackChannel,
   deleteSlackMessage,
   editSlackMessage,
   getSlackMemberInfo,
@@ -20,7 +21,13 @@ import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js"
 import { withNormalizedTimestamp } from "../date-time.js";
 import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
 
-const messagingActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
+const messagingActions = new Set([
+  "sendMessage",
+  "editMessage",
+  "deleteMessage",
+  "readMessages",
+  "createChannel",
+]);
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
@@ -74,6 +81,23 @@ function resolveThreadTsFromContext(
   if (context.replyToMode === "first" && context.hasRepliedRef && !context.hasRepliedRef.value) {
     context.hasRepliedRef.value = true;
     return context.currentThreadTs;
+  }
+  return undefined;
+}
+
+function parseBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
+  const raw = params[key];
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const value = raw.trim().toLowerCase();
+    if (value === "true" || value === "1" || value === "yes") {
+      return true;
+    }
+    if (value === "false" || value === "0" || value === "no") {
+      return false;
+    }
   }
   return undefined;
 }
@@ -242,6 +266,59 @@ export async function handleSlackAction(
           ),
         );
         return jsonResult({ ok: true, messages, hasMore: result.hasMore });
+      }
+      case "createChannel": {
+        const name = readStringParam(params, "name", { required: true });
+        const isPrivate = parseBooleanParam(params, "isPrivate") ?? false;
+        const fallbackTo = readStringParam(params, "fallbackTo");
+        const fallbackMessage = readStringParam(params, "fallbackMessage", {
+          allowEmpty: true,
+        });
+        const contextDmFallback =
+          !fallbackTo &&
+          context?.currentChannelId &&
+          context.currentChannelId.trim().toUpperCase().startsWith("D")
+            ? `channel:${context.currentChannelId.trim()}`
+            : undefined;
+        const fallbackTarget = fallbackTo ?? contextDmFallback;
+        try {
+          const result = writeOpts
+            ? await createSlackChannel(name, { ...writeOpts, isPrivate })
+            : await createSlackChannel(name, { isPrivate });
+          return jsonResult({ ok: true, result });
+        } catch (err) {
+          const createError = err instanceof Error ? err.message : String(err);
+          if (!fallbackTarget) {
+            throw err;
+          }
+          const message =
+            fallbackMessage?.trim() ||
+            `I couldn't create channel "${name}" in Slack, so I'm sending updates here instead.`;
+          try {
+            const fallbackResult = await sendSlackMessage(fallbackTarget, message, {
+              ...writeOpts,
+              threadTs: contextDmFallback ? context?.currentThreadTs : undefined,
+            });
+            return jsonResult({
+              ok: true,
+              result: {
+                created: false,
+                fallbackUsed: true,
+                fallbackTo: fallbackTarget,
+                createError,
+                fallbackResult,
+              },
+            });
+          } catch (fallbackErr) {
+            const fallbackError =
+              fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+            throw new Error(
+              `Slack createChannel failed (${createError}) and fallback DM failed (${fallbackError})`,
+              { cause: err },
+              { cause: fallbackErr },
+            );
+          }
+        }
       }
       default:
         break;
