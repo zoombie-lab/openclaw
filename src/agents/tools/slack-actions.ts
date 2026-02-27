@@ -315,7 +315,6 @@ export async function handleSlackAction(
             throw new Error(
               `Slack createChannel failed (${createError}) and fallback DM failed (${fallbackError})`,
               { cause: err },
-              { cause: fallbackErr },
             );
           }
         }
