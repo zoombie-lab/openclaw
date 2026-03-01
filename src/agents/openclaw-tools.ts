@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createShopifyOpsTool } from "../custom/tools/shopify-ops-actions.js";
+import { createSlackTool } from "../custom/tools/slack-tool.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
@@ -11,6 +13,7 @@ import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
+import { createSaveFileTool } from "./tools/save-file-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -18,8 +21,6 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
-import { createSlackTool } from "../custom/tools/slack-tool.js";
-import { createShopifyOpsTool } from "../custom/tools/shopify-ops-actions.js";
 
 export function createOpenClawTools(options?: {
   sandboxBrowserBridgeUrl?: string;
@@ -100,6 +101,11 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
+    createSaveFileTool({
+      config: options?.config,
+      sandboxRoot: options?.sandboxRoot,
+      workspaceDir: options?.workspaceDir,
+    }),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
     }),
@@ -148,12 +154,16 @@ export function createOpenClawTools(options?: {
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
-    createSlackTool({
-      config: options?.config,
-      agentAccountId: options?.agentAccountId,
-      currentChannelId: options?.currentChannelId,
-      currentThreadTs: options?.currentThreadTs,
-    }),
+    ...(options?.agentChannel === "slack"
+      ? [
+          createSlackTool({
+            config: options?.config,
+            agentAccountId: options?.agentAccountId,
+            currentChannelId: options?.currentChannelId,
+            currentThreadTs: options?.currentThreadTs,
+          }),
+        ]
+      : []),
     createShopifyOpsTool(),
   ];
 

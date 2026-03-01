@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn();
@@ -75,6 +76,7 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
+    expect(schemaProp("sessions_send", "callbackMode").type).toBe("string");
     expect(schemaProp("sessions_spawn", "thinking").type).toBe("string");
     expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "timeoutSeconds").type).toBe("number");
@@ -521,6 +523,89 @@ describe("sessions tools", () => {
     expect(waitCalls).toHaveLength(3);
     expect(historyOnlyCalls).toHaveLength(1);
     expect(sendCallCount).toBe(0);
+  });
+
+  it("sessions_send can defer callbacks until all task sections are complete", async () => {
+    callGatewayMock.mockReset();
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    const requesterKey = "discord:group:req";
+    const taskPath = "/data/shared/tasks/queue/2026-02-21-gather-7-days-data.md";
+    const readFileMock = vi.spyOn(fs, "readFile").mockResolvedValue(
+      `# Task: Gather 7 days data
+## Specialist Findings
+### Revenue
+**Status:** Complete
+**Updated At (UTC):** 2026-02-21 10:00
+**Summary:** Revenue complete.
+
+### Inventory
+**Status:** Complete
+**Updated At (UTC):** 2026-02-21 10:01
+**Summary:** Inventory complete.
+
+## Synthesis
+Pending.
+` as never,
+    );
+    try {
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: unknown };
+        calls.push(request);
+        if (request.method === "agent") {
+          agentCallCount += 1;
+          return {
+            runId: `run-${agentCallCount}`,
+            status: "accepted",
+            acceptedAt: 9000 + agentCallCount,
+          };
+        }
+        if (request.method === "agent.wait") {
+          const params = request.params as { runId?: string } | undefined;
+          return { runId: params?.runId ?? "run-1", status: "ok" };
+        }
+        return {};
+      });
+
+      const tool = createOpenClawTools({
+        agentSessionKey: requesterKey,
+        agentChannel: "discord",
+      }).find((candidate) => candidate.name === "sessions_send");
+      expect(tool).toBeDefined();
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
+
+      const result = await tool.execute("call6a", {
+        sessionKey: "main",
+        message: `New task assigned: ${taskPath}. Investigate and report back when complete.`,
+        timeoutSeconds: 0,
+        callbackMode: "all-complete",
+      });
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        runId: "run-1",
+      });
+
+      await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 2);
+      await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 1);
+
+      const agentCalls = calls.filter((call) => call.method === "agent");
+      expect(agentCalls).toHaveLength(2);
+
+      const callbackCall = agentCalls.find(
+        (call) => (call.params as { sessionKey?: string })?.sessionKey === requesterKey,
+      );
+      expect(callbackCall).toBeDefined();
+      expect((callbackCall?.params as { message?: string })?.message).toContain(
+        "TASK_READY_FOR_SYNTHESIS",
+      );
+      expect((callbackCall?.params as { message?: string })?.message).not.toContain(
+        "TASK_COMPLETE",
+      );
+    } finally {
+      readFileMock.mockRestore();
+    }
   });
 
   it("sessions_send callback is always internal (deliver:false) regardless of requester channel", async () => {

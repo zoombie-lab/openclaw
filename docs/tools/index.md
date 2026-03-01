@@ -365,6 +365,25 @@ Notes:
 - Only available when `agents.defaults.imageModel` is configured (primary or fallbacks), or when an implicit image model can be inferred from your default model + configured auth (best-effort pairing).
 - Uses the image model directly (independent of the main chat model).
 
+### `save_file`
+
+Save a file in the workspace from text, a base64 payload/data URL, or a URL/path.
+
+Core parameters:
+
+- `path` (required output path inside the workspace/sandbox)
+- `text` (optional UTF-8 text source)
+- `buffer` (optional base64 payload; data: URLs also accepted)
+- `url` (optional HTTP(S), `file://`, or local path source)
+- `contentType` / `mimeType` (optional metadata)
+- `attach` (optional; include a `MEDIA:` line for the saved file)
+
+Notes:
+
+- Provide exactly one source: `text`, `buffer`, or `url`.
+- Paths are constrained to the current workspace/sandbox root.
+- Use `attach: true` to make it easy to hand the saved file to the normal reply/media pipeline.
+
 ### `message`
 
 Send messages and channel actions across Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.

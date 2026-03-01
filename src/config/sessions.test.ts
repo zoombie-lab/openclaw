@@ -474,12 +474,13 @@ describe("sessions", () => {
         origin: {
           from: "slack:U123",
         },
+        lastThreadId: "1718452800.123",
       };
       const sessionFile = resolveSessionFilePath("sess-2", entry);
       expect(sessionFile).toContain(
-        path.join(path.resolve("/custom/state"), "workspace", "history", "slack", "direct"),
+        path.join(path.resolve("/custom/state"), "workspace", "history", "slack", "dm-u123"),
       );
-      expect(path.basename(sessionFile)).toMatch(/^\d{4}-\d{2}-\d{2}\.jsonl$/);
+      expect(path.basename(sessionFile)).toMatch(/^\d{4}-\d{2}-\d{2}_1718452800_123\.jsonl$/);
     } finally {
       if (prev === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
@@ -502,6 +503,7 @@ describe("sessions", () => {
         origin: {
           from: "slack:U123",
         },
+        lastThreadId: "1718452800.123",
       };
       vi.setSystemTime(new Date("2026-02-19T10:00:00.000Z"));
       const day1 = resolvePredictableSessionPath(entry);
@@ -514,8 +516,8 @@ describe("sessions", () => {
         ...entry,
         sessionFile: day1,
       });
-      expect(day2).not.toBe(day1);
-      expect(path.basename(day2)).toBe("2026-02-20.jsonl");
+      expect(day2).toBe(day1); // For predictable paths tied to a thread TS, they DO NOT rotate by system date, they stick to the thread date
+      expect(path.basename(day2)).toBe("2024-06-15_1718452800_123.jsonl"); // Derived from the thread TS, not the current system time
     } finally {
       vi.useRealTimers();
       if (prev === undefined) {
@@ -539,6 +541,7 @@ describe("sessions", () => {
           from: "whatsapp:+15550000001",
           to: "whatsapp:+15550000002",
         },
+        lastThreadId: "1718452800.123",
       });
       const outbound = resolvePredictableSessionPath({
         sessionId: "s1",
@@ -549,6 +552,7 @@ describe("sessions", () => {
           from: "whatsapp:+15550000002",
           to: "whatsapp:+15550000001",
         },
+        lastThreadId: "1718452800.123",
       });
       expect(inbound).toBeTruthy();
       expect(outbound).toBeTruthy();

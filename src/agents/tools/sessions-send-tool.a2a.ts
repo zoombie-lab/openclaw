@@ -9,6 +9,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterChannel?: GatewayMessageChannel;
   waitRunId?: string;
   sourceMessage?: string;
+  callbackMode?: "each" | "all-complete";
 }) {
   registerSessionsSendA2ARun({
     targetSessionKey: params.targetSessionKey,
@@ -18,5 +19,6 @@ export async function runSessionsSendA2AFlow(params: {
     requesterChannel: params.requesterChannel,
     runId: params.waitRunId,
     sourceMessage: params.sourceMessage,
+    callbackMode: params.callbackMode,
   });
 }

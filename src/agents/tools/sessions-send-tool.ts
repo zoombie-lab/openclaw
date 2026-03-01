@@ -34,6 +34,7 @@ const SessionsSendToolSchema = Type.Object({
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  callbackMode: Type.Optional(Type.String({ minLength: 1 })),
 });
 
 export function createSessionsSendTool(opts?: {
@@ -222,6 +223,21 @@ export function createSessionsSendTool(opts?: {
         typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
           : 30;
+      const callbackModeParam = readStringParam(params, "callbackMode")?.trim().toLowerCase();
+      const callbackMode =
+        callbackModeParam === undefined || callbackModeParam === ""
+          ? "each"
+          : callbackModeParam === "each" || callbackModeParam === "all-complete"
+            ? callbackModeParam
+            : undefined;
+      if (!callbackMode) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: 'callbackMode must be either "each" or "all-complete".',
+          sessionKey: displayKey,
+        });
+      }
       const timeoutMs = timeoutSeconds * 1000;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
@@ -288,6 +304,7 @@ export function createSessionsSendTool(opts?: {
           requesterChannel,
           waitRunId,
           sourceMessage: message,
+          callbackMode,
         });
       };
 

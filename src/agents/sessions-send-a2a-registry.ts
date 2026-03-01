@@ -32,6 +32,7 @@ export type SessionsSendA2ARunRecord = {
   targetSessionKey: string;
   displayKey: string;
   callbackSessionKey: string;
+  callbackMode?: "each" | "all-complete";
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
   sourceMessage?: string;
@@ -141,7 +142,7 @@ function evaluateSpecialistTaskCompletion(content: string): TaskCompletionState 
   }
   let completeSections = 0;
   for (const body of sectionBodies) {
-    if (/^\*\*Status:\*\*\s*Complete\b/im.test(body)) {
+    if (/^(?:-\s*)?\*\*Status:\*\*\s*Complete\b/im.test(body)) {
       completeSections += 1;
     }
   }
@@ -285,6 +286,9 @@ function markSynthesisSignaled(params: { callbackSessionKey: string; taskPath: s
     if (typeof entry.synthesisCompletedAt === "number") {
       continue;
     }
+    if (typeof entry.callbackCompletedAt !== "number") {
+      entry.callbackCompletedAt = completedAt;
+    }
     entry.synthesisCompletedAt = completedAt;
     mutated = true;
   }
@@ -362,8 +366,11 @@ async function processA2ARun(runId: string) {
       return;
     }
 
+    const shouldSendPerRunCallback =
+      entry.callbackMode !== "all-complete" || !entry.taskPath || entry.completion.status !== "ok";
+
     let mutated = false;
-    if (typeof entry.callbackCompletedAt !== "number") {
+    if (shouldSendPerRunCallback && typeof entry.callbackCompletedAt !== "number") {
       try {
         await sendCompletionCallback(entry);
         entry.callbackCompletedAt = Date.now();
@@ -568,6 +575,7 @@ export function registerSessionsSendA2ARun(params: {
   requesterChannel?: GatewayMessageChannel;
   runId?: string;
   sourceMessage?: string;
+  callbackMode?: "each" | "all-complete";
 }) {
   const runId = typeof params.runId === "string" ? params.runId.trim() : "";
   if (!runId) {
@@ -589,6 +597,7 @@ export function registerSessionsSendA2ARun(params: {
     targetSessionKey: params.targetSessionKey,
     displayKey: params.displayKey,
     callbackSessionKey,
+    callbackMode: params.callbackMode ?? existing?.callbackMode ?? "each",
     requesterSessionKey: params.requesterSessionKey,
     requesterChannel: params.requesterChannel,
     sourceMessage: params.sourceMessage,
