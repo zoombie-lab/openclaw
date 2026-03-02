@@ -116,6 +116,37 @@ function decodeImageDataUrl(dataUrl: string): Buffer {
   return Buffer.from(match[1], "base64");
 }
 
+async function resolveSandboxedImagePath(params: {
+  sandboxRoot: string;
+  imagePath: string;
+}): Promise<{ resolved: string; rewrittenFrom?: string }> {
+  const normalize = (p: string) => (p.startsWith("file://") ? p.slice("file://".length) : p);
+  const filePath = normalize(params.imagePath);
+  try {
+    const out = await assertSandboxPath({
+      filePath,
+      cwd: params.sandboxRoot,
+      root: params.sandboxRoot,
+    });
+    return { resolved: out.resolved };
+  } catch (err) {
+    const name = path.basename(filePath);
+    const candidateRel = path.join("media", "inbound", name);
+    const candidateAbs = path.join(params.sandboxRoot, candidateRel);
+    try {
+      await fs.stat(candidateAbs);
+    } catch {
+      throw err;
+    }
+    const out = await assertSandboxPath({
+      filePath: candidateRel,
+      cwd: params.sandboxRoot,
+      root: params.sandboxRoot,
+    });
+    return { resolved: out.resolved, rewrittenFrom: filePath };
+  }
+}
+
 export function createEditImageTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -173,7 +204,10 @@ export function createEditImageTool(options?: {
       }
 
       const inputPath = String(imagePaths[0]).trim();
-      const safeInput = await assertSandboxPath({ filePath: inputPath, cwd: root, root });
+      const safeInput = await resolveSandboxedImagePath({
+        sandboxRoot: root,
+        imagePath: inputPath,
+      });
 
       const ext = path.extname(safeInput.resolved);
       const base = path.basename(safeInput.resolved, ext);
@@ -340,6 +374,7 @@ export function createEditImageTool(options?: {
           displayPath,
           model: modelUsed,
           provider: providerUsed,
+          ...(safeInput.rewrittenFrom ? { rewrittenFrom: safeInput.rewrittenFrom } : {}),
           ...(fallbackFrom ? { fallbackFrom } : {}),
         },
       };

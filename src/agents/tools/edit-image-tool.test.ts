@@ -212,4 +212,42 @@ describe("edit_image tool", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer image-tool-key");
   });
+
+  it("rewrites inbound absolute media paths into sandbox media/inbound", async () => {
+    const sandboxRoot = await makeSandbox();
+    await fs.mkdir(path.join(sandboxRoot, "media", "inbound"), { recursive: true });
+    await writeJpeg(path.join(sandboxRoot, "media", "inbound", "product.jpg"));
+    vi.stubEnv("AI_GATEWAY_API_KEY", "gateway-test-key");
+
+    const pngDataUrl = await makePngDataUrl();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              images: [{ type: "image_url", image_url: { url: pngDataUrl } }],
+            },
+          },
+        ],
+      }),
+    });
+    // @ts-expect-error partial fetch mock
+    global.fetch = fetchMock;
+
+    const tool = createEditImageTool({ sandboxRoot });
+    const result = await tool.execute("call-4", {
+      image_paths: ["/data/media/inbound/product.jpg"],
+      prompt: "Clean background.",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.details).toMatchObject({
+      provider: "vercel-ai-gateway",
+      rewrittenFrom: "/data/media/inbound/product.jpg",
+      original_path: path.join(sandboxRoot, "media", "inbound", "product.jpg"),
+    });
+  });
 });
