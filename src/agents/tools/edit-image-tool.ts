@@ -5,6 +5,7 @@ import sharp from "sharp";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { resolveFetch } from "../../infra/fetch.js";
+import { getMediaDir } from "../../media/store.js";
 import { resolveApiKeyForProvider } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { assertSandboxPath } from "../sandbox-paths.js";
@@ -116,6 +117,13 @@ function decodeImageDataUrl(dataUrl: string): Buffer {
   return Buffer.from(match[1], "base64");
 }
 
+/**
+ * Resolve an image path for the edit_image tool.
+ *
+ * Primary: the path must be inside the agent sandbox root.
+ * Fallback 1: if the same basename exists in sandbox media/inbound, use that staged copy.
+ * Fallback 2: if the path is under the OpenClaw media store, allow reading it directly.
+ */
 async function resolveSandboxedImagePath(params: {
   sandboxRoot: string;
   imagePath: string;
@@ -135,15 +143,32 @@ async function resolveSandboxedImagePath(params: {
     const candidateAbs = path.join(params.sandboxRoot, candidateRel);
     try {
       await fs.stat(candidateAbs);
+      const out = await assertSandboxPath({
+        filePath: candidateRel,
+        cwd: params.sandboxRoot,
+        root: params.sandboxRoot,
+      });
+      return { resolved: out.resolved, rewrittenFrom: filePath };
+    } catch {
+      // Fall through to the direct media-store check.
+    }
+
+    if (!path.isAbsolute(filePath)) {
+      throw err;
+    }
+
+    const mediaRoot = getMediaDir();
+    try {
+      const out = await assertSandboxPath({
+        filePath,
+        cwd: mediaRoot,
+        root: mediaRoot,
+      });
+      await fs.stat(out.resolved);
+      return { resolved: out.resolved };
     } catch {
       throw err;
     }
-    const out = await assertSandboxPath({
-      filePath: candidateRel,
-      cwd: params.sandboxRoot,
-      root: params.sandboxRoot,
-    });
-    return { resolved: out.resolved, rewrittenFrom: filePath };
   }
 }
 

@@ -213,10 +213,11 @@ describe("edit_image tool", () => {
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer image-tool-key");
   });
 
-  it("rewrites inbound absolute media paths into sandbox media/inbound", async () => {
+  it("rewrites inbound absolute media paths to the staged sandbox copy when present", async () => {
     const sandboxRoot = await makeSandbox();
-    await fs.mkdir(path.join(sandboxRoot, "media", "inbound"), { recursive: true });
-    await writeJpeg(path.join(sandboxRoot, "media", "inbound", "product.jpg"));
+    const stagedDir = path.join(sandboxRoot, "media", "inbound");
+    await fs.mkdir(stagedDir, { recursive: true });
+    await writeJpeg(path.join(stagedDir, "product.jpg"));
     vi.stubEnv("AI_GATEWAY_API_KEY", "gateway-test-key");
 
     const pngDataUrl = await makePngDataUrl();
@@ -238,15 +239,16 @@ describe("edit_image tool", () => {
     global.fetch = fetchMock;
 
     const tool = createEditImageTool({ sandboxRoot });
+    const imagePath = "/data/media/inbound/product.jpg";
     const result = await tool.execute("call-4", {
-      image_paths: ["/data/media/inbound/product.jpg"],
+      image_paths: [imagePath],
       prompt: "Clean background.",
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.details).toMatchObject({
       provider: "vercel-ai-gateway",
-      rewrittenFrom: "/data/media/inbound/product.jpg",
+      rewrittenFrom: imagePath,
       original_path: path.join(sandboxRoot, "media", "inbound", "product.jpg"),
     });
   });
