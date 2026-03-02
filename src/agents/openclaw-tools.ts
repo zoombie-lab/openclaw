@@ -9,6 +9,7 @@ import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import { createCronTool } from "./tools/cron-tool.js";
+import { createEditImageTool } from "./tools/edit-image-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
@@ -103,6 +104,12 @@ export function createOpenClawTools(options?: {
     }),
     createSaveFileTool({
       config: options?.config,
+      sandboxRoot: options?.sandboxRoot,
+      workspaceDir: options?.workspaceDir,
+    }),
+    createEditImageTool({
+      config: options?.config,
+      agentDir: options?.agentDir,
       sandboxRoot: options?.sandboxRoot,
       workspaceDir: options?.workspaceDir,
     }),

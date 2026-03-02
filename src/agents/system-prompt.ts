@@ -233,6 +233,8 @@ export function buildAgentSystemPrompt(params: {
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     save_file: "Save a file in the workspace from text, base64/data URL, or a URL/path",
+    edit_image:
+      "Edit an image using AI by providing an original image and a prompt. Useful for removing backgrounds, changing lighting, etc.",
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
@@ -262,6 +264,7 @@ export function buildAgentSystemPrompt(params: {
     "canvas",
     "nodes",
     "save_file",
+    "edit_image",
     "cron",
     "message",
     "gateway",
