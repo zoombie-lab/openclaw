@@ -193,7 +193,11 @@ export function createEditImageTool(options?: {
         modelUsed = modelUsed ?? DEFAULT_GATEWAY_IMAGE_MODEL;
         const flyUrl = process.env.FLY_IMAGE_API_URL || "https://your-fly-app.fly.dev/edit";
         const formData = new FormData();
-        formData.append("image", new Blob([pngBuffer], { type: "image/png" }), "image.png");
+        formData.append(
+          "image",
+          new Blob([new Uint8Array(pngBuffer)], { type: "image/png" }),
+          "image.png",
+        );
         formData.append("prompt", prompt);
         formData.append("model", modelUsed);
 
@@ -291,7 +295,11 @@ export function createEditImageTool(options?: {
           modelUsed = modelUsed ?? DEFAULT_OPENAI_IMAGE_MODEL;
           const endpoint = `${route.baseUrl.replace(/\/$/, "")}/images/edits`;
           const formData = new FormData();
-          formData.append("image", new Blob([pngBuffer], { type: "image/png" }), "image.png");
+          formData.append(
+            "image",
+            new Blob([new Uint8Array(pngBuffer)], { type: "image/png" }),
+            "image.png",
+          );
           formData.append("prompt", prompt);
           formData.append("model", modelUsed);
           formData.append("response_format", "b64_json");
