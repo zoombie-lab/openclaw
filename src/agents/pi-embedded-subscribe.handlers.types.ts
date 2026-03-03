@@ -40,7 +40,6 @@ export type EmbeddedPiSubscribeState = {
   partialBlockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
   lastStreamedAssistant?: string;
   lastStreamedAssistantCleaned?: string;
-  latestAssistantUsage?: NormalizedUsage;
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
