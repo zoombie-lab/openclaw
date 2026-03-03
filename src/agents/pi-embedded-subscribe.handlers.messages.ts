@@ -16,6 +16,12 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+import {
+  estimateTokensFromValue,
+  hasNonzeroUsage,
+  normalizeUsage,
+  type UsageLike,
+} from "./usage.js";
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -28,6 +34,66 @@ const stripTrailingDirective = (text: string): string => {
   }
   return text.slice(0, openIndex);
 };
+
+function isSameMessage(left: unknown, right: AgentMessage): boolean {
+  if (!left || typeof left !== "object") {
+    return false;
+  }
+  if (left === right) {
+    return true;
+  }
+
+  const leftId = (left as { id?: unknown }).id;
+  const rightId = (right as { id?: unknown }).id;
+  return typeof leftId === "string" && leftId.length > 0 && leftId === rightId;
+}
+
+function isLikelyAssistantPlaceholder(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+
+  const assistantMessage = message as {
+    role?: unknown;
+    content?: unknown;
+    usage?: unknown;
+    errorMessage?: unknown;
+    stopReason?: unknown;
+  };
+
+  if (assistantMessage.role !== "assistant") {
+    return false;
+  }
+  if (!Array.isArray(assistantMessage.content) || assistantMessage.content.length !== 0) {
+    return false;
+  }
+  if (assistantMessage.usage != null || assistantMessage.errorMessage != null) {
+    return false;
+  }
+  if (assistantMessage.stopReason != null) {
+    return false;
+  }
+
+  return true;
+}
+
+function snapshotEstimatedPromptTokens(
+  ctx: EmbeddedPiSubscribeContext,
+  currentMessage: AgentMessage,
+): number | undefined {
+  const sessionMessages = (ctx.params.session as { messages?: unknown[] }).messages;
+  if (!Array.isArray(sessionMessages) || sessionMessages.length === 0) {
+    return undefined;
+  }
+
+  const promptMessages = sessionMessages.slice();
+  const lastMessage = promptMessages.at(-1);
+  if (isSameMessage(lastMessage, currentMessage) || isLikelyAssistantPlaceholder(lastMessage)) {
+    promptMessages.pop();
+  }
+
+  return estimateTokensFromValue(promptMessages);
+}
 
 export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
@@ -44,6 +110,7 @@ export function handleMessageStart(
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+  ctx.state.estimatedPromptTokens = snapshotEstimatedPromptTokens(ctx, msg);
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
@@ -198,7 +265,26 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
-  ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  const normalizedUsage = normalizeUsage(
+    (assistantMessage as { usage?: unknown }).usage as UsageLike | undefined,
+  );
+  if (hasNonzeroUsage(normalizedUsage)) {
+    ctx.recordAssistantUsage(normalizedUsage);
+  } else {
+    const estimatedInput = ctx.state.estimatedPromptTokens;
+    const estimatedOutput = estimateTokensFromValue(
+      (assistantMessage as { content?: unknown; errorMessage?: unknown }).content ??
+        (assistantMessage as { errorMessage?: unknown }).errorMessage,
+    );
+    if ((estimatedInput ?? 0) > 0 || (estimatedOutput ?? 0) > 0) {
+      ctx.recordAssistantUsage({
+        input: estimatedInput,
+        output: estimatedOutput,
+        total: (estimatedInput ?? 0) + (estimatedOutput ?? 0) || undefined,
+      });
+    }
+  }
+  ctx.state.estimatedPromptTokens = undefined;
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);

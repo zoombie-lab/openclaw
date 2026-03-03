@@ -134,3 +134,47 @@ export function deriveSessionTotalTokens(params: {
   }
   return total;
 }
+
+export function estimateTokensFromText(text: string): number {
+  if (!text) {
+    return 0;
+  }
+  return Math.ceil(text.length / 4);
+}
+
+export function estimateTokensFromValue(value: unknown): number | undefined {
+  if (value == null) {
+    return undefined;
+  }
+
+  if (typeof value === "string") {
+    const estimated = estimateTokensFromText(value);
+    return estimated > 0 ? estimated : undefined;
+  }
+
+  try {
+    const seen = new WeakSet<object>();
+    const serialized = JSON.stringify(value, (_key, currentValue) => {
+      if (typeof currentValue === "bigint") {
+        return currentValue.toString();
+      }
+      if (typeof currentValue === "function" || typeof currentValue === "undefined") {
+        return undefined;
+      }
+      if (currentValue && typeof currentValue === "object") {
+        if (seen.has(currentValue)) {
+          return "[Circular]";
+        }
+        seen.add(currentValue);
+      }
+      return currentValue;
+    });
+    if (!serialized) {
+      return undefined;
+    }
+    const estimated = estimateTokensFromText(serialized);
+    return estimated > 0 ? estimated : undefined;
+  } catch {
+    return undefined;
+  }
+}

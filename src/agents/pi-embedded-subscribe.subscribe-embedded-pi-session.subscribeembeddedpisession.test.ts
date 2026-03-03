@@ -1,8 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import { estimateTokensFromValue } from "./usage.js";
 
 type StubSession = {
+  messages?: unknown[];
   subscribe: (fn: (evt: unknown) => void) => () => void;
 };
 
@@ -248,6 +250,59 @@ describe("subscribeEmbeddedPiSession", () => {
       .map((call) => call[0]?.data as Record<string, unknown> | undefined)
       .filter((value): value is Record<string, unknown> => Boolean(value));
     expect(payloads).toHaveLength(1);
+  });
+
+  it("estimates and accumulates usage across assistant turns when provider usage is missing", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      messages: [],
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+    });
+
+    const assistantOne = {
+      role: "assistant",
+      content: [{ type: "text", text: "First answer" }],
+    } as AssistantMessage;
+    const firstPromptMessages = [{ role: "user", content: "First question" }];
+    session.messages = [...firstPromptMessages, { role: "assistant", content: [] }];
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({ type: "message_end", message: assistantOne });
+
+    const assistantTwo = {
+      role: "assistant",
+      content: [{ type: "text", text: "Second answer" }],
+    } as AssistantMessage;
+    const secondPromptMessages = [
+      ...firstPromptMessages,
+      assistantOne,
+      { role: "user", content: "Second question" },
+    ];
+    session.messages = [...secondPromptMessages, { role: "assistant", content: [] }];
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({ type: "message_end", message: assistantTwo });
+
+    const expectedInput =
+      (estimateTokensFromValue(firstPromptMessages) ?? 0) +
+      (estimateTokensFromValue(secondPromptMessages) ?? 0);
+    const expectedOutput =
+      (estimateTokensFromValue(assistantOne.content) ?? 0) +
+      (estimateTokensFromValue(assistantTwo.content) ?? 0);
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: expectedInput,
+      output: expectedOutput,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: expectedInput + expectedOutput,
+    });
   });
 
   it("skips agent events when cleaned text rewinds mid-stream", () => {
