@@ -10,11 +10,11 @@ import {
   modelKey,
   normalizeProviderId,
   resolveModelRefFromString,
+  resolveStoredModelOverride,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 
 export type ModelDirectiveSelection = {
   provider: string;
@@ -24,6 +24,8 @@ export type ModelDirectiveSelection = {
 };
 
 type ModelCatalog = Awaited<ReturnType<typeof loadModelCatalog>>;
+
+export { resolveStoredModelOverride };
 
 type ModelSelectionState = {
   provider: string;
@@ -91,64 +93,6 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
     return null;
   }
   return dist;
-}
-
-export type StoredModelOverride = {
-  provider?: string;
-  model: string;
-  source: "session" | "parent";
-};
-
-function resolveModelOverrideFromEntry(entry?: SessionEntry): {
-  provider?: string;
-  model: string;
-} | null {
-  const model = entry?.modelOverride?.trim();
-  if (!model) {
-    return null;
-  }
-  const provider = entry?.providerOverride?.trim() || undefined;
-  return { provider, model };
-}
-
-function resolveParentSessionKeyCandidate(params: {
-  sessionKey?: string;
-  parentSessionKey?: string;
-}): string | null {
-  const explicit = params.parentSessionKey?.trim();
-  if (explicit && explicit !== params.sessionKey) {
-    return explicit;
-  }
-  const derived = resolveThreadParentSessionKey(params.sessionKey);
-  if (derived && derived !== params.sessionKey) {
-    return derived;
-  }
-  return null;
-}
-
-export function resolveStoredModelOverride(params: {
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  parentSessionKey?: string;
-}): StoredModelOverride | null {
-  const direct = resolveModelOverrideFromEntry(params.sessionEntry);
-  if (direct) {
-    return { ...direct, source: "session" };
-  }
-  const parentKey = resolveParentSessionKeyCandidate({
-    sessionKey: params.sessionKey,
-    parentSessionKey: params.parentSessionKey,
-  });
-  if (!parentKey || !params.sessionStore) {
-    return null;
-  }
-  const parentEntry = params.sessionStore[parentKey];
-  const parentOverride = resolveModelOverrideFromEntry(parentEntry);
-  if (!parentOverride) {
-    return null;
-  }
-  return { ...parentOverride, source: "parent" };
 }
 
 function scoreFuzzyMatch(params: {

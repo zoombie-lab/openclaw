@@ -12,7 +12,7 @@ import {
   buildModelAliasIndex,
   type ModelAliasIndex,
   modelKey,
-  resolveDefaultModelForAgent,
+  resolveEffectiveModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
@@ -232,7 +232,7 @@ export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: str
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
 } {
-  const mainModel = resolveDefaultModelForAgent({
+  const { defaultRef: mainModel } = resolveEffectiveModelRef({
     cfg: params.cfg,
     agentId: params.agentId,
   });

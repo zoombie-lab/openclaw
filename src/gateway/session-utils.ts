@@ -9,10 +9,7 @@ import type {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import {
-  resolveConfiguredModelRef,
-  resolveDefaultModelForAgent,
-} from "../agents/model-selection.js";
+import { resolveEffectiveModelRef, resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -533,21 +530,11 @@ export function resolveSessionModelRef(
   entry?: SessionEntry,
   agentId?: string,
 ): { provider: string; model: string } {
-  const resolved = agentId
-    ? resolveDefaultModelForAgent({ cfg, agentId })
-    : resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
-  let provider = resolved.provider;
-  let model = resolved.model;
-  const storedModelOverride = entry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    provider = entry?.providerOverride?.trim() || provider;
-    model = storedModelOverride;
-  }
-  return { provider, model };
+  return resolveEffectiveModelRef({
+    cfg,
+    agentId,
+    sessionEntry: entry,
+  }).effectiveRef;
 }
 
 export function listSessionsFromStore(params: {

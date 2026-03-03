@@ -78,4 +78,58 @@ describe("stageSandboxMedia", () => {
       await expect(fs.stat(stagedFullPath)).resolves.toBeTruthy();
     });
   });
+
+  it("stages inbound local media into the agent workspace when no sandbox exists", async () => {
+    await withTempHome(async (home) => {
+      const inboundDir = join(home, ".openclaw", "media", "inbound");
+      await fs.mkdir(inboundDir, { recursive: true });
+      const mediaPath = join(inboundDir, "photo.jpg");
+      await fs.writeFile(mediaPath, "test");
+
+      vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue(null);
+
+      const agentWorkspaceDir = join(home, "openclaw");
+      const ctx: MsgContext = {
+        Body: "hi",
+        From: "slack:user:demo",
+        To: "channel:C123",
+        ChatType: "channel",
+        Provider: "slack",
+        MediaPath: mediaPath,
+        MediaType: "image/jpeg",
+        MediaUrl: mediaPath,
+      };
+      const sessionCtx: TemplateContext = { ...ctx };
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg: {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: agentWorkspaceDir,
+              sandbox: {
+                mode: "non-main",
+                workspaceRoot: join(home, "sandboxes"),
+              },
+            },
+          },
+          channels: { slack: { allowFrom: ["*"] } },
+          session: { store: join(home, "sessions.json") },
+        },
+        sessionKey: "agent:freddy:main",
+        workspaceDir: agentWorkspaceDir,
+      });
+
+      const stagedPath = `media/inbound/${basename(mediaPath)}`;
+      expect(ctx.MediaPath).toBe(stagedPath);
+      expect(sessionCtx.MediaPath).toBe(stagedPath);
+      expect(ctx.MediaUrl).toBe(stagedPath);
+      expect(sessionCtx.MediaUrl).toBe(stagedPath);
+
+      const stagedFullPath = join(agentWorkspaceDir, "media", "inbound", basename(mediaPath));
+      await expect(fs.stat(stagedFullPath)).resolves.toBeTruthy();
+    });
+  });
 });

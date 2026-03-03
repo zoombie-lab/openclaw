@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import type { loadConfig } from "../config/config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveEffectiveModelRef } from "../agents/model-selection.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 
 export function logGatewayStartup(params: {
@@ -13,12 +13,12 @@ export function logGatewayStartup(params: {
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
 }) {
-  const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const { effectiveRef } = resolveEffectiveModelRef({
     cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    agentId: defaultAgentId,
   });
-  const modelRef = `${agentProvider}/${agentModel}`;
+  const modelRef = `${effectiveRef.provider}/${effectiveRef.model}`;
   params.log.info(`agent model: ${modelRef}`, {
     consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
   });

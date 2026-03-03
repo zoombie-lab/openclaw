@@ -395,38 +395,6 @@ export async function runReplyAgent(params: {
       cliSessionId,
     });
 
-    // Drain any late tool/block deliveries before deciding there's "nothing to send".
-    // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
-    // keep the typing indicator stuck.
-    if (payloadArray.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
-    }
-
-    const payloadResult = buildReplyPayloads({
-      payloads: payloadArray,
-      isHeartbeat,
-      didLogHeartbeatStrip,
-      blockStreamingEnabled,
-      blockReplyPipeline,
-      directlySentBlockKeys,
-      replyToMode,
-      replyToChannel,
-      currentMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-      messageProvider: followupRun.run.messageProvider,
-      messagingToolSentTexts: runResult.messagingToolSentTexts,
-      messagingToolSentTargets: runResult.messagingToolSentTargets,
-      originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
-      accountId: sessionCtx.AccountId,
-    });
-    const { replyPayloads } = payloadResult;
-    didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
-
-    if (replyPayloads.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
-    }
-
-    await signalTypingIfNeeded(replyPayloads, typingSignals);
-
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
@@ -463,6 +431,38 @@ export async function runReplyAgent(params: {
         durationMs: Date.now() - runStartedAt,
       });
     }
+
+    // Drain any late tool/block deliveries before deciding there's "nothing to send".
+    // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
+    // keep the typing indicator stuck.
+    if (payloadArray.length === 0) {
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
+
+    const payloadResult = buildReplyPayloads({
+      payloads: payloadArray,
+      isHeartbeat,
+      didLogHeartbeatStrip,
+      blockStreamingEnabled,
+      blockReplyPipeline,
+      directlySentBlockKeys,
+      replyToMode,
+      replyToChannel,
+      currentMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+      messageProvider: followupRun.run.messageProvider,
+      messagingToolSentTexts: runResult.messagingToolSentTexts,
+      messagingToolSentTargets: runResult.messagingToolSentTargets,
+      originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
+      accountId: sessionCtx.AccountId,
+    });
+    const { replyPayloads } = payloadResult;
+    didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
+
+    if (replyPayloads.length === 0) {
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
+
+    await signalTypingIfNeeded(replyPayloads, typingSignals);
 
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??

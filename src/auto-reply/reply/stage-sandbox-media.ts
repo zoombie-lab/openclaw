@@ -36,11 +36,13 @@ export async function stageSandboxMedia(params: {
     workspaceDir,
   });
 
-  // For remote attachments without sandbox, use ~/.openclaw/media (not agent workspace for privacy)
+  // For remote attachments without sandbox, use ~/.openclaw/media (not agent workspace for privacy).
+  // For local attachments without sandbox, still stage into the agent workspace so tools only see
+  // workspace-relative media paths instead of absolute host paths like /data/media/inbound/...
   const remoteMediaCacheDir = ctx.MediaRemoteHost
     ? path.join(CONFIG_DIR, "media", "remote-cache", sessionKey)
     : null;
-  const effectiveWorkspaceDir = sandbox?.workspaceDir ?? remoteMediaCacheDir;
+  const effectiveWorkspaceDir = sandbox?.workspaceDir ?? remoteMediaCacheDir ?? workspaceDir;
   if (!effectiveWorkspaceDir) {
     return;
   }
@@ -64,10 +66,12 @@ export async function stageSandboxMedia(params: {
   };
 
   try {
-    // For sandbox: <workspace>/media/inbound, for remote cache: use dir directly
-    const destDir = sandbox
-      ? path.join(effectiveWorkspaceDir, "media", "inbound")
-      : effectiveWorkspaceDir;
+    // For sandbox and local non-sandbox: <workspace>/media/inbound.
+    // For remote cache without sandbox: use the cache dir directly.
+    const destDir =
+      sandbox || !ctx.MediaRemoteHost
+        ? path.join(effectiveWorkspaceDir, "media", "inbound")
+        : effectiveWorkspaceDir;
     await fs.mkdir(destDir, { recursive: true });
 
     const usedNames = new Set<string>();
@@ -117,8 +121,10 @@ export async function stageSandboxMedia(params: {
       } else {
         await fs.copyFile(source, dest);
       }
-      // For sandbox use relative path, for remote cache use absolute path
-      const stagedPath = sandbox ? path.posix.join("media", "inbound", fileName) : dest;
+      // For sandbox and local non-sandbox use a relative workspace path.
+      // For remote cache without sandbox keep the absolute cache path.
+      const stagedPath =
+        sandbox || !ctx.MediaRemoteHost ? path.posix.join("media", "inbound", fileName) : dest;
       staged.set(source, stagedPath);
     }
 

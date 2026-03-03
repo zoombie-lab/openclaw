@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
+import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentModelPrimary } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
@@ -7,6 +9,18 @@ import { normalizeGoogleModelId } from "./models-config.providers.js";
 export type ModelRef = {
   provider: string;
   model: string;
+};
+
+export type StoredModelOverride = {
+  provider?: string;
+  model: string;
+  source: "session" | "parent";
+};
+
+export type EffectiveModelResolution = {
+  defaultRef: ModelRef;
+  effectiveRef: ModelRef;
+  source: "global" | "agent" | "session" | "parent";
 };
 
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -251,6 +265,99 @@ export function resolveDefaultModelForAgent(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+}
+
+function resolveModelOverrideFromEntry(entry?: SessionEntry): {
+  provider?: string;
+  model: string;
+} | null {
+  const model = entry?.modelOverride?.trim();
+  if (!model) {
+    return null;
+  }
+  const provider = entry?.providerOverride?.trim() || undefined;
+  return { provider, model };
+}
+
+function resolveParentSessionKeyCandidate(params: {
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): string | null {
+  const explicit = params.parentSessionKey?.trim();
+  if (explicit && explicit !== params.sessionKey) {
+    return explicit;
+  }
+  const derived = resolveThreadParentSessionKey(params.sessionKey);
+  if (derived && derived !== params.sessionKey) {
+    return derived;
+  }
+  return null;
+}
+
+export function resolveStoredModelOverride(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): StoredModelOverride | null {
+  const direct = resolveModelOverrideFromEntry(params.sessionEntry);
+  if (direct) {
+    return { ...direct, source: "session" };
+  }
+  const parentKey = resolveParentSessionKeyCandidate({
+    sessionKey: params.sessionKey,
+    parentSessionKey: params.parentSessionKey,
+  });
+  if (!parentKey || !params.sessionStore) {
+    return null;
+  }
+  const parentEntry = params.sessionStore[parentKey];
+  const parentOverride = resolveModelOverrideFromEntry(parentEntry);
+  if (!parentOverride) {
+    return null;
+  }
+  return { ...parentOverride, source: "parent" };
+}
+
+export function resolveEffectiveModelRef(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): EffectiveModelResolution {
+  const hasAgentOverride = Boolean(
+    params.agentId && resolveAgentModelPrimary(params.cfg, params.agentId)?.trim(),
+  );
+  const defaultRef = params.agentId
+    ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
+    : resolveConfiguredModelRef({
+        cfg: params.cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
+  const storedOverride = resolveStoredModelOverride({
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+    sessionKey: params.sessionKey,
+    parentSessionKey: params.parentSessionKey,
+  });
+  if (!storedOverride?.model) {
+    return {
+      defaultRef,
+      effectiveRef: defaultRef,
+      source: hasAgentOverride ? "agent" : "global",
+    };
+  }
+  return {
+    defaultRef,
+    effectiveRef: {
+      provider: storedOverride.provider || defaultRef.provider,
+      model: storedOverride.model,
+    },
+    source: storedOverride.source,
+  };
 }
 
 export function buildAllowedModelSet(params: {
