@@ -16,6 +16,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -55,6 +56,11 @@ export function handleMessageUpdate(
   const msg = evt.message;
   if (msg?.role !== "assistant") {
     return;
+  }
+
+  const streamedUsage = normalizeUsage((msg as { usage?: unknown }).usage as UsageLike | undefined);
+  if (hasNonzeroUsage(streamedUsage)) {
+    ctx.state.latestAssistantUsage = streamedUsage;
   }
 
   const assistantEvent = evt.assistantMessageEvent;
@@ -198,7 +204,13 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
-  ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  const finalUsage = normalizeUsage(
+    (assistantMessage as { usage?: unknown }).usage as UsageLike | undefined,
+  );
+  ctx.recordAssistantUsage(
+    hasNonzeroUsage(finalUsage) ? finalUsage : ctx.state.latestAssistantUsage,
+  );
+  ctx.state.latestAssistantUsage = undefined;
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);
