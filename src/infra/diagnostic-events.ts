@@ -147,7 +147,19 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
     : never
   : never;
 let seq = 0;
-const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
+
+// Use globalThis to ensure a single shared listener set even when this module
+// is duplicated across bundles (e.g. main app bundle vs plugin-sdk bundle).
+const GLOBAL_KEY = Symbol.for("openclaw.diagnostic.listeners");
+const listeners: Set<(evt: DiagnosticEventPayload) => void> =
+  ((globalThis as Record<symbol, unknown>)[GLOBAL_KEY] as Set<
+    (evt: DiagnosticEventPayload) => void
+  >) ??
+  (() => {
+    const s = new Set<(evt: DiagnosticEventPayload) => void>();
+    (globalThis as Record<symbol, unknown>)[GLOBAL_KEY] = s;
+    return s;
+  })();
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
