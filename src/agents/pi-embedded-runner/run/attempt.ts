@@ -60,6 +60,12 @@ import {
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import {
+  hasNonzeroUsage,
+  normalizeUsage,
+  type NormalizedUsage,
+  type UsageLike,
+} from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
@@ -136,6 +142,139 @@ export function injectHistoryImagesIntoMessages(
   }
 
   return didMutate;
+}
+
+export type UsageAccumulator = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+};
+
+export const createUsageAccumulator = (): UsageAccumulator => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  total: 0,
+});
+
+const recordUsage = (target: UsageAccumulator, usageLike: unknown) => {
+  const usage = normalizeUsage((usageLike ?? undefined) as UsageLike | undefined);
+  if (!hasNonzeroUsage(usage)) {
+    return;
+  }
+  target.input += usage.input ?? 0;
+  target.output += usage.output ?? 0;
+  target.cacheRead += usage.cacheRead ?? 0;
+  target.cacheWrite += usage.cacheWrite ?? 0;
+  target.total +=
+    usage.total ??
+    (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+};
+
+export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
+  const hasUsage =
+    usage.input > 0 ||
+    usage.output > 0 ||
+    usage.cacheRead > 0 ||
+    usage.cacheWrite > 0 ||
+    usage.total > 0;
+  if (!hasUsage) {
+    return undefined;
+  }
+  const derivedTotal = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  return {
+    input: usage.input || undefined,
+    output: usage.output || undefined,
+    cacheRead: usage.cacheRead || undefined,
+    cacheWrite: usage.cacheWrite || undefined,
+    total: usage.total || derivedTotal || undefined,
+  };
+};
+
+const extractUsageFromTerminalEvent = (event: unknown): NormalizedUsage | undefined => {
+  if (!event || typeof event !== "object") {
+    return undefined;
+  }
+  const record = event as { type?: unknown; message?: unknown; error?: unknown };
+  if (record.type === "done") {
+    return normalizeUsage(
+      ((record.message as { usage?: unknown } | undefined)?.usage as UsageLike | undefined) ??
+        undefined,
+    );
+  }
+  if (record.type === "error") {
+    return normalizeUsage(
+      ((record.error as { usage?: unknown } | undefined)?.usage as UsageLike | undefined) ??
+        undefined,
+    );
+  }
+  return undefined;
+};
+
+const extractUsageFromFinalResult = (result: unknown): NormalizedUsage | undefined =>
+  normalizeUsage(
+    ((result as { usage?: unknown } | undefined)?.usage as UsageLike | undefined) ?? undefined,
+  );
+
+type MutableAssistantEventStream = {
+  push: (event: unknown) => void;
+  end: (result?: unknown) => void;
+};
+
+export function wrapStreamFnWithTransportUsage<TArgs extends unknown[], TReturn>(
+  streamFn: (...args: TArgs) => TReturn,
+  usageAccumulator: UsageAccumulator,
+): (...args: TArgs) => TReturn {
+  const wrapStream = <TStream>(stream: TStream): TStream => {
+    if (!stream || typeof stream !== "object") {
+      return stream;
+    }
+    const maybeStream = stream as Partial<MutableAssistantEventStream>;
+    if (typeof maybeStream.push !== "function" || typeof maybeStream.end !== "function") {
+      return stream;
+    }
+
+    const originalPush = maybeStream.push.bind(stream);
+    const originalEnd = maybeStream.end.bind(stream);
+    let sawTerminalEvent = false;
+
+    maybeStream.push = ((event: unknown) => {
+      const usage = extractUsageFromTerminalEvent(event);
+      if (usage) {
+        recordUsage(usageAccumulator, usage);
+      }
+      const eventType = (event as { type?: unknown } | undefined)?.type;
+      if (eventType === "done" || eventType === "error") {
+        sawTerminalEvent = true;
+      }
+      originalPush(event);
+    }) as MutableAssistantEventStream["push"];
+
+    maybeStream.end = ((result?: unknown) => {
+      if (!sawTerminalEvent) {
+        const usage = extractUsageFromFinalResult(result);
+        if (usage) {
+          recordUsage(usageAccumulator, usage);
+        }
+      }
+      originalEnd(result);
+    }) as MutableAssistantEventStream["end"];
+
+    return stream;
+  };
+
+  const wrapped = ((...args: TArgs) => {
+    const result = streamFn(...args);
+    if (result && typeof result === "object" && "then" in result) {
+      return Promise.resolve(result).then((stream) => wrapStream(stream));
+    }
+    return wrapStream(result);
+  }) as (...args: TArgs) => TReturn;
+
+  return wrapped;
 }
 
 export async function runEmbeddedAttempt(
@@ -535,6 +674,7 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
+      const transportUsageTotals = createUsageAccumulator();
 
       // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
       activeSession.agent.streamFn = streamSimple;
@@ -560,6 +700,10 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+      activeSession.agent.streamFn = wrapStreamFnWithTransportUsage(
+        activeSession.agent.streamFn,
+        transportUsageTotals,
+      );
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -914,6 +1058,8 @@ export async function runEmbeddedAttempt(
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
+      const transcriptUsage = getUsageTotals();
+      const transportUsage = toNormalizedUsage(transportUsageTotals);
 
       return {
         aborted,
@@ -932,7 +1078,7 @@ export async function runEmbeddedAttempt(
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),
-        attemptUsage: getUsageTotals(),
+        attemptUsage: transportUsage ?? transcriptUsage,
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
