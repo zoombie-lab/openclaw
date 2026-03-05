@@ -53,7 +53,9 @@ function buildUsagePayload(evt: DiagnosticUsageEvent) {
   const output = asNonNegativeNumber(evt.usage.output);
   const cacheRead = asNonNegativeNumber(evt.usage.cacheRead);
   const cacheWrite = asNonNegativeNumber(evt.usage.cacheWrite);
-  const total = asNonNegativeNumber(evt.usage.total) || input + output + cacheRead + cacheWrite;
+  const promptTokens =
+    asNonNegativeNumber(evt.usage.promptTokens) || input + cacheRead + cacheWrite;
+  const total = asNonNegativeNumber(evt.usage.total) || promptTokens + output;
 
   const durationMs = asNonNegativeNumber(evt.durationMs);
   const finishedAtMs = asNonNegativeNumber(evt.ts);
@@ -74,6 +76,7 @@ function buildUsagePayload(evt: DiagnosticUsageEvent) {
       output,
       cacheRead,
       cacheWrite,
+      promptTokens,
       total,
     },
     startedAt: startedAtMs > 0 ? toIso(startedAtMs) : undefined,
