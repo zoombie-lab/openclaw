@@ -1096,6 +1096,14 @@ export class MemoryIndexManager implements MemorySearchManager {
     return false;
   }
 
+  private isSessionSyncDeferredByReason(params?: { reason?: string; force?: boolean }) {
+    if (!this.sources.has("sessions") || params?.force) {
+      return false;
+    }
+    const reason = params?.reason;
+    return reason === "session-start" || reason === "watch";
+  }
+
   private async syncMemoryFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
@@ -1344,7 +1352,10 @@ export class MemoryIndexManager implements MemorySearchManager {
         await this.syncSessionFiles({ needsFullReindex, progress: progress ?? undefined });
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
-      } else if (this.sessionsDirtyFiles.size > 0) {
+      } else if (
+        this.sessionsDirtyFiles.size > 0 ||
+        (this.isSessionSyncDeferredByReason(params) && this.sessionsDirty)
+      ) {
         this.sessionsDirty = true;
       } else {
         this.sessionsDirty = false;
@@ -1495,7 +1506,10 @@ export class MemoryIndexManager implements MemorySearchManager {
         await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
-      } else if (this.sessionsDirtyFiles.size > 0) {
+      } else if (
+        this.sessionsDirtyFiles.size > 0 ||
+        (this.isSessionSyncDeferredByReason(params) && this.sessionsDirty)
+      ) {
         this.sessionsDirty = true;
       } else {
         this.sessionsDirty = false;
