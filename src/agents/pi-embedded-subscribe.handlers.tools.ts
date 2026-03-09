@@ -14,6 +14,20 @@ import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 import { normalizeToolParams } from "./pi-tools.read.js";
 import { normalizeToolName } from "./tool-policy.js";
 
+const ARG_SUMMARY_MAX_LEN = 240;
+const MESSAGE_PREVIEW_MAX_LEN = 160;
+const TASK_PREVIEW_MAX_LEN = 240;
+const REDACTED_VALUE = "[redacted]";
+const SECRET_KEY_PATTERNS = [
+  /token/i,
+  /secret/i,
+  /password/i,
+  /api[-_]?key/i,
+  /authorization/i,
+  /cookie/i,
+  /bearer/i,
+];
+
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = toolName.trim().toLowerCase();
   if (normalized !== "exec" && normalized !== "bash") {
@@ -37,6 +51,165 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
+function truncateForLog(value: string, maxLen = ARG_SUMMARY_MAX_LEN): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLen) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, maxLen - 1)}…`;
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function shouldRedactKey(key: string): boolean {
+  return SECRET_KEY_PATTERNS.some((pattern) => pattern.test(key));
+}
+
+function sanitizeValueForLog(value: unknown, depth = 0): unknown {
+  if (value == null) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return truncateForLog(normalizeWhitespace(value));
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (depth >= 2) {
+      return `[array:${value.length}]`;
+    }
+    return value.slice(0, 8).map((entry) => sanitizeValueForLog(entry, depth + 1));
+  }
+  if (typeof value === "object") {
+    if (depth >= 2) {
+      return "[object]";
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = shouldRedactKey(key) ? REDACTED_VALUE : sanitizeValueForLog(entry, depth + 1);
+    }
+    return out;
+  }
+  return String(value);
+}
+
+function safeJsonForLog(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseTaskContract(task: string): Record<string, string> {
+  const summary: Record<string, string> = {};
+  const matchers: Array<[key: string, pattern: RegExp]> = [
+    ["taskId", /^Task ID:\s*(.+)$/im],
+    ["agentId", /^Agent ID:\s*(.+)$/im],
+    ["question", /^Question:\s*(.+)$/im],
+    ["artifact", /^Artifact path:\s*(.+)$/im],
+  ];
+  for (const [key, pattern] of matchers) {
+    const match = task.match(pattern);
+    if (match?.[1]) {
+      summary[key] = truncateForLog(normalizeWhitespace(match[1]));
+    }
+  }
+  return summary;
+}
+
+function summarizeMessageArgs(argsRecord: Record<string, unknown>): Record<string, unknown> {
+  const messageText =
+    typeof argsRecord.message === "string"
+      ? argsRecord.message
+      : typeof argsRecord.content === "string"
+        ? argsRecord.content
+        : "";
+  return {
+    action: typeof argsRecord.action === "string" ? argsRecord.action : undefined,
+    channel: typeof argsRecord.channel === "string" ? argsRecord.channel : undefined,
+    target: typeof argsRecord.target === "string" ? argsRecord.target : undefined,
+    to: typeof argsRecord.to === "string" ? argsRecord.to : undefined,
+    replyTo: typeof argsRecord.replyTo === "string" ? argsRecord.replyTo : undefined,
+    threadId:
+      typeof argsRecord.threadId === "string" || typeof argsRecord.threadId === "number"
+        ? String(argsRecord.threadId)
+        : undefined,
+    messageLen: messageText.length || undefined,
+    messagePreview: messageText
+      ? truncateForLog(normalizeWhitespace(messageText), MESSAGE_PREVIEW_MAX_LEN)
+      : undefined,
+  };
+}
+
+function summarizeToolArgs(toolName: string, args: unknown): string | undefined {
+  const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : null;
+  if (!argsRecord) {
+    if (typeof args === "string") {
+      return truncateForLog(normalizeWhitespace(args));
+    }
+    return undefined;
+  }
+
+  let summary: Record<string, unknown> | undefined;
+  if (toolName === "read") {
+    const normalized = normalizeToolParams(args);
+    const record =
+      normalized ?? (args && typeof args === "object" ? (args as Record<string, unknown>) : {});
+    summary = {
+      path: typeof record.path === "string" ? record.path : undefined,
+      cwd: typeof record.cwd === "string" ? record.cwd : undefined,
+      encoding: typeof record.encoding === "string" ? record.encoding : undefined,
+      offset: typeof record.offset === "number" ? record.offset : undefined,
+      length: typeof record.length === "number" ? record.length : undefined,
+    };
+  } else if (toolName === "write" || toolName === "edit") {
+    const text =
+      typeof argsRecord.content === "string"
+        ? argsRecord.content
+        : typeof argsRecord.text === "string"
+          ? argsRecord.text
+          : "";
+    summary = {
+      path: typeof argsRecord.path === "string" ? argsRecord.path : undefined,
+      contentLen: text.length || undefined,
+    };
+  } else if (toolName === "shopify_ops") {
+    summary = sanitizeValueForLog(argsRecord) as Record<string, unknown>;
+  } else if (toolName === "sessions_spawn") {
+    const task = typeof argsRecord.task === "string" ? argsRecord.task : "";
+    summary = {
+      agentId: typeof argsRecord.agentId === "string" ? argsRecord.agentId : undefined,
+      label: typeof argsRecord.label === "string" ? argsRecord.label : undefined,
+      runTimeoutSeconds:
+        typeof argsRecord.runTimeoutSeconds === "number" ? argsRecord.runTimeoutSeconds : undefined,
+      cleanup: typeof argsRecord.cleanup === "string" ? argsRecord.cleanup : undefined,
+      ...parseTaskContract(task),
+      taskPreview: task
+        ? truncateForLog(normalizeWhitespace(task), TASK_PREVIEW_MAX_LEN)
+        : undefined,
+    };
+  } else if (isMessagingTool(toolName)) {
+    summary = summarizeMessageArgs(argsRecord);
+  } else {
+    summary = sanitizeValueForLog(argsRecord) as Record<string, unknown>;
+  }
+
+  const compactEntries = Object.entries(summary).filter(([, value]) => value !== undefined);
+  if (compactEntries.length === 0) {
+    return undefined;
+  }
+  return safeJsonForLog(Object.fromEntries(compactEntries));
+}
+
+export const __test__ = {
+  parseTaskContract,
+  summarizeToolArgs,
+};
+
 export async function handleToolExecutionStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
@@ -51,6 +224,7 @@ export async function handleToolExecutionStart(
   const toolName = normalizeToolName(rawToolName);
   const toolCallId = String(evt.toolCallId);
   const args = evt.args;
+  const argsSummary = summarizeToolArgs(toolName, args);
 
   if (toolName === "read") {
     const normalized = normalizeToolParams(args);
@@ -69,7 +243,7 @@ export async function handleToolExecutionStart(
   const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
   ctx.state.toolMetaById.set(toolCallId, meta);
   ctx.log.debug(
-    `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+    `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}${argsSummary ? ` args=${argsSummary}` : ""}`,
   );
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
@@ -81,6 +255,7 @@ export async function handleToolExecutionStart(
       name: toolName,
       toolCallId,
       args: args as Record<string, unknown>,
+      argsSummary,
     },
   });
   // Best-effort typing signal; do not block tool summaries on slow emitters.

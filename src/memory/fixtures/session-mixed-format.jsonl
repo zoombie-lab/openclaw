@@ -1,0 +1,4 @@
+{"type":"session","version":1,"id":"s-mixed"}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"alpha openclaw user note"}],"timestamp":1700000100000}}
+{"type":"message","username":"bob","user":"U2","text":"alpha slack note","ts":"1800000000.000001","thread_ts":"1800000000.000000"}
+{"type":"message","subtype":"message_changed","message":{"type":"message","username":"bob","user":"U2","text":"alpha slack edited note","ts":"1800000001.000001","thread_ts":"1800000000.000000"}}

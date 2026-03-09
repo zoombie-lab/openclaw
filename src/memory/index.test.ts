@@ -36,6 +36,8 @@ vi.mock("./embeddings.js", () => {
 describe("memory index", () => {
   let workspaceDir: string;
   let indexPath: string;
+  let stateDir: string;
+  let previousStateDir: string | undefined;
   let manager: MemoryIndexManager | null = null;
 
   beforeEach(async () => {
@@ -43,6 +45,9 @@ describe("memory index", () => {
     failEmbeddings = false;
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-state-"));
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     await fs.mkdir(path.join(workspaceDir, "memory"));
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-01-12.md"),
@@ -57,7 +62,43 @@ describe("memory index", () => {
       manager = null;
     }
     await fs.rm(workspaceDir, { recursive: true, force: true });
+    await fs.rm(stateDir, { recursive: true, force: true });
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
   });
+
+  const buildSessionsConfig = (overrides?: {
+    sources?: Array<"memory" | "sessions">;
+    extraPaths?: string[];
+    sessionStorePath?: string;
+    query?: Record<string, unknown>;
+  }) => ({
+    agents: {
+      defaults: {
+        workspace: workspaceDir,
+        memorySearch: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { path: indexPath, vector: { enabled: false } },
+          experimental: { sessionMemory: true },
+          sources: overrides?.sources ?? ["memory", "sessions"],
+          extraPaths: overrides?.extraPaths,
+          sync: { watch: false, onSessionStart: false, onSearch: true },
+          query: { minScore: 0, ...overrides?.query },
+        },
+      },
+      list: [{ id: "main", default: true }],
+    },
+    ...(overrides?.sessionStorePath ? { session: { store: overrides.sessionStorePath } } : {}),
+  });
+
+  async function writeSessionStore(storePath: string, payload: Record<string, unknown>) {
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(storePath, JSON.stringify(payload, null, 2), "utf-8");
+  }
 
   it("indexes memory files and searches by vector", async () => {
     const cfg = {
@@ -485,5 +526,361 @@ describe("memory index", () => {
         "path required",
       );
     }
+  });
+
+  it("discovers recursive history jsonl files and dedupes normalized session paths", async () => {
+    const historyFile = path.join(
+      stateDir,
+      "workspace",
+      "history",
+      "slack",
+      "channel-one",
+      "2026-03-01_alice_1700000000.000001.jsonl",
+    );
+    const legacyFile = path.join(stateDir, "agents", "main", "sessions", "legacy-thread.jsonl");
+    await fs.mkdir(path.dirname(historyFile), { recursive: true });
+    await fs.mkdir(path.dirname(legacyFile), { recursive: true });
+    await fs.writeFile(
+      historyFile,
+      `${JSON.stringify({
+        type: "message",
+        username: "alice",
+        user: "U1",
+        text: "alpha recursive history entry",
+        ts: "1700000000.000001",
+        thread_ts: "1700000000.000001",
+      })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      legacyFile,
+      `${JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "alpha legacy transcript" }],
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const normalizedHistoryViaDotSegments = path.join(
+      path.dirname(historyFile),
+      "..",
+      path.basename(path.dirname(historyFile)),
+      path.basename(historyFile),
+    );
+    await writeSessionStore(storePath, {
+      "agent:main:slack:channel:c1": {
+        sessionId: "s1",
+        sessionFile: normalizedHistoryViaDotSegments,
+      },
+    });
+
+    const cfg = buildSessionsConfig({
+      sources: ["sessions"],
+      sessionStorePath: storePath,
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
+    await manager.sync({ force: true });
+
+    const status = manager.status();
+    const sessionsSource = status.sourceCounts?.find((entry) => entry.source === "sessions");
+    expect(sessionsSource?.files).toBe(2);
+    expect(status.sessions?.discovery?.candidateFiles).toBe(2);
+
+    const results = await manager.search("alpha", { maxResults: 10, minScore: 0 });
+    expect(results.some((entry) => entry.path.includes("sessions/history/slack/channel-one"))).toBe(
+      true,
+    );
+    expect(results.every((entry) => !entry.path.includes(".."))).toBe(true);
+  });
+
+  it("parses both openclaw and raw slack jsonl records with labels and timestamps", async () => {
+    const historyFile = path.join(
+      stateDir,
+      "workspace",
+      "history",
+      "slack",
+      "dm-bob",
+      "2026-03-05_1700000100.000001.jsonl",
+    );
+    await fs.mkdir(path.dirname(historyFile), { recursive: true });
+    const fixture = await fs.readFile(
+      new URL("./fixtures/session-mixed-format.jsonl", import.meta.url),
+      "utf-8",
+    );
+    await fs.writeFile(historyFile, fixture, "utf-8");
+
+    const cfg = buildSessionsConfig({ sources: ["sessions"] });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
+    await manager.sync({ force: true });
+
+    const results = await manager.search("alpha", { maxResults: 10, minScore: 0 });
+    const snippets = results.map((entry) => entry.snippet).join("\n");
+    expect(snippets).toContain("User: alpha openclaw user note");
+    expect(snippets).toContain("Slack bob: alpha slack note");
+    expect(snippets).toContain("Slack bob: alpha slack edited note");
+
+    const sessions = manager.status().sessions;
+    expect((sessions?.datedChunks ?? 0) >= 3).toBe(true);
+    expect((sessions?.latestMessageTs ?? 0) > (sessions?.earliestMessageTs ?? 0)).toBe(true);
+  });
+
+  it("applies time filters to candidate retrieval and excludes out-of-range session chunks", async () => {
+    const historyFile = path.join(
+      stateDir,
+      "workspace",
+      "history",
+      "slack",
+      "channel-two",
+      "2026-03-06_1700000200.000001.jsonl",
+    );
+    await fs.mkdir(path.dirname(historyFile), { recursive: true });
+    const fixture = await fs.readFile(
+      new URL("./fixtures/slack-history-timefilter.jsonl", import.meta.url),
+      "utf-8",
+    );
+    await fs.writeFile(historyFile, fixture, "utf-8");
+
+    const cfg = buildSessionsConfig({ sources: ["sessions"] });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
+    await manager.sync({ force: true });
+
+    const baseline = await manager.search("alpha", { maxResults: 10, minScore: 0 });
+    expect(baseline.some((entry) => entry.snippet.includes("older"))).toBe(true);
+    expect(baseline.some((entry) => entry.snippet.includes("newer"))).toBe(true);
+
+    const inRange = await manager.search("alpha", {
+      maxResults: 10,
+      minScore: 0,
+      from: 1_750_000_000,
+      to: 1_850_000_000,
+      timezone: "America/New_York",
+    });
+    expect(inRange.length).toBeGreaterThan(0);
+    expect(inRange.every((entry) => entry.snippet.includes("newer"))).toBe(true);
+
+    const outOfRange = await manager.search("alpha", {
+      maxResults: 10,
+      minScore: 0,
+      to: 1_750_000_000,
+      timezone: "America/New_York",
+    });
+    expect(outOfRange.length).toBeGreaterThan(0);
+    expect(outOfRange.every((entry) => entry.snippet.includes("older"))).toBe(true);
+  });
+
+  it("keeps static memory results when time filters are provided", async () => {
+    const cfg = buildSessionsConfig({ sources: ["memory"] });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
+    await manager.sync({ force: true });
+    const filtered = await manager.search("beta", {
+      maxResults: 10,
+      minScore: 0,
+      from: 1_750_000_000,
+      to: 1_850_000_000,
+    });
+    expect(filtered.some((entry) => entry.path.includes("MEMORY.md"))).toBe(true);
+  });
+
+  it("applies date-only boundaries in the provided timezone", async () => {
+    const historyFile = path.join(
+      stateDir,
+      "workspace",
+      "history",
+      "slack",
+      "timezone-room",
+      "2026-03-03_1772506800.000000.jsonl",
+    );
+    await fs.mkdir(path.dirname(historyFile), { recursive: true });
+    await fs.writeFile(
+      historyFile,
+      `${JSON.stringify({
+        type: "message",
+        username: "alice",
+        text: "alpha timezone boundary note",
+        ts: "1772506800.000000",
+      })}\n`,
+      "utf-8",
+    );
+
+    const cfg = buildSessionsConfig({ sources: ["sessions"] });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
+    await manager.sync({ force: true });
+
+    const utcRange = await manager.search("alpha", {
+      maxResults: 10,
+      minScore: 0,
+      from: "2026-03-02",
+      to: "2026-03-02",
+    });
+    expect(utcRange.length).toBe(0);
+
+    const tzRange = await manager.search("alpha", {
+      maxResults: 10,
+      minScore: 0,
+      from: "2026-03-02",
+      to: "2026-03-02",
+      timezone: "America/New_York",
+    });
+    expect(tzRange.length).toBeGreaterThan(0);
+    expect(tzRange.every((entry) => entry.snippet.includes("timezone boundary"))).toBe(true);
+  });
+
+  it("preserves millisecond session timestamps before year 2001", async () => {
+    const historyFile = path.join(
+      stateDir,
+      "workspace",
+      "history",
+      "slack",
+      "legacy-ms",
+      "1998-07-09_900000000000.jsonl",
+    );
+    await fs.mkdir(path.dirname(historyFile), { recursive: true });
+    await fs.writeFile(
+      historyFile,
+      `${JSON.stringify({
+        type: "message",
+        username: "alice",
+        text: "alpha pre-2001 ms timestamp",
+        ts: "900000000000",
+      })}\n`,
+      "utf-8",
+    );
+
+    const cfg = buildSessionsConfig({ sources: ["sessions"] });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
+    await manager.sync({ force: true });
+
+    const sessions = manager.status().sessions;
+    expect(sessions?.latestMessageTs).toBe(900_000_000_000);
+    const range = await manager.search("alpha", {
+      maxResults: 10,
+      minScore: 0,
+      from: 899_999_999_000,
+      to: 900_000_001_000,
+    });
+    expect(range.length).toBeGreaterThan(0);
+  });
+
+  it("reindexes sessions when only timestamps change", async () => {
+    const historyFile = path.join(
+      stateDir,
+      "workspace",
+      "history",
+      "slack",
+      "reindex-ts-only",
+      "2026-03-07_1700000000.000000.jsonl",
+    );
+    await fs.mkdir(path.dirname(historyFile), { recursive: true });
+    await fs.writeFile(
+      historyFile,
+      `${JSON.stringify({
+        type: "message",
+        username: "alice",
+        text: "alpha timestamp-only-change",
+        ts: "1700000000.000000",
+      })}\n`,
+      "utf-8",
+    );
+
+    const cfg = buildSessionsConfig({ sources: ["sessions"] });
+    const first = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(first.manager).not.toBeNull();
+    if (!first.manager) {
+      throw new Error("manager missing");
+    }
+    manager = first.manager;
+    await manager.sync({ force: true });
+    const oldRange = await manager.search("alpha", {
+      maxResults: 10,
+      minScore: 0,
+      from: 1_750_000_000,
+      to: 1_850_000_000,
+    });
+    expect(oldRange.length).toBe(0);
+    await manager.close();
+    manager = null;
+
+    await fs.writeFile(
+      historyFile,
+      `${JSON.stringify({
+        type: "message",
+        username: "alice",
+        text: "alpha timestamp-only-change",
+        ts: "1800000000.000000",
+      })}\n`,
+      "utf-8",
+    );
+
+    const second = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(second.manager).not.toBeNull();
+    if (!second.manager) {
+      throw new Error("manager missing");
+    }
+    manager = second.manager;
+    await manager.sync({ reason: "search" });
+    const newRange = await manager.search("alpha", {
+      maxResults: 10,
+      minScore: 0,
+      from: 1_750_000_000,
+      to: 1_850_000_000,
+    });
+    expect(newRange.length).toBeGreaterThan(0);
+  });
+
+  it("keeps noticeboard markdown search results working without time filters", async () => {
+    const noticeboardDir = path.join(workspaceDir, "noticeboard");
+    await fs.mkdir(noticeboardDir, { recursive: true });
+    await fs.writeFile(
+      path.join(noticeboardDir, "weekly.md"),
+      "Alpha alpha alpha alpha alpha noticeboard updates.",
+      "utf-8",
+    );
+    const cfg = buildSessionsConfig({
+      sources: ["memory", "sessions"],
+      extraPaths: [noticeboardDir],
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
+    await manager.sync({ force: true });
+    const results = await manager.search("alpha", { maxResults: 10, minScore: 0 });
+    expect(results.some((entry) => entry.path.includes("noticeboard/weekly.md"))).toBe(true);
   });
 });

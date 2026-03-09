@@ -279,7 +279,7 @@
     "memory_search": {
       "emoji": "🧠",
       "title": "Memory Search",
-      "detailKeys": ["query"]
+      "detailKeys": ["query", "from", "to", "timezone"]
     },
     "memory_get": {
       "emoji": "📓",

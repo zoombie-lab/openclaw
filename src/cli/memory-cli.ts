@@ -398,6 +398,33 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts)}`);
       }
     }
+    if (status.sessions) {
+      lines.push(
+        `${label("Sessions")} ${info(
+          `${status.sessions.indexedFiles} files · ${status.sessions.datedChunks} dated chunks`,
+        )}`,
+      );
+      if (status.sessions.earliestDateBucket && status.sessions.latestDateBucket) {
+        lines.push(
+          `${label("Session dates")} ${info(
+            `${status.sessions.earliestDateBucket}..${status.sessions.latestDateBucket}`,
+          )}`,
+        );
+      }
+      if (status.sessions.parseFailures > 0) {
+        lines.push(
+          `${label("Session parse failures")} ${warn(String(status.sessions.parseFailures))}`,
+        );
+      }
+      const discovery = status.sessions.discovery;
+      if (discovery && (discovery.limitedByFileCount || discovery.limitedByTotalBytes)) {
+        lines.push(
+          `${label("Session discovery")} ${warn(
+            `limited (files=${discovery.indexableFiles}, bytes=${discovery.totalBytes})`,
+          )}`,
+        );
+      }
+    }
     if (status.fallback) {
       lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
     }
@@ -650,6 +677,9 @@ export function registerMemoryCli(program: Command) {
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--max-results <n>", "Max results", (value: string) => Number(value))
     .option("--min-score <n>", "Minimum score", (value: string) => Number(value))
+    .option("--from <value>", "Inclusive start bound (ISO datetime/date or unix timestamp)")
+    .option("--to <value>", "Inclusive end bound (ISO datetime/date or unix timestamp)")
+    .option("--timezone <value>", "IANA timezone (for caller-side relative date resolution)")
     .option("--json", "Print JSON")
     .action(
       async (
@@ -657,6 +687,9 @@ export function registerMemoryCli(program: Command) {
         opts: MemoryCommandOptions & {
           maxResults?: number;
           minScore?: number;
+          from?: string;
+          to?: string;
+          timezone?: string;
         },
       ) => {
         const cfg = loadConfig();
@@ -675,6 +708,9 @@ export function registerMemoryCli(program: Command) {
               results = await manager.search(query, {
                 maxResults: opts.maxResults,
                 minScore: opts.minScore,
+                from: opts.from,
+                to: opts.to,
+                timezone: opts.timezone,
               });
             } catch (err) {
               const message = formatErrorMessage(err);

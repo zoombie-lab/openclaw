@@ -51,6 +51,8 @@ function buildMemorySection(params: {
   const lines = [
     "## Memory Recall",
     "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    "For time-bounded questions (for example: today, yesterday, last week, last month, between dates), include explicit memory_search time filters: from, to, timezone.",
+    "Relative-date rule: resolve windows in the user's timezone; 'last week' means the previous Monday 00:00:00.000 through Sunday 23:59:59.999.",
   ];
   if (params.citationsMode === "off") {
     lines.push(

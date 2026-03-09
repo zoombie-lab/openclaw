@@ -10,6 +10,21 @@ export type OpenAiEmbeddingClient = {
 export const DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
+function resolveRemoteApiKey(remoteApiKey?: string): string | undefined {
+  const trimmed = remoteApiKey?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Allow config like remote.apiKey: "AI_GATEWAY_API_KEY"
+  if (/^[A-Z][A-Z0-9_]*$/.test(trimmed)) {
+    const fromEnv = process.env[trimmed]?.trim();
+    if (fromEnv) {
+      return fromEnv;
+    }
+  }
+  return trimmed;
+}
+
 export function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
@@ -65,7 +80,7 @@ export async function resolveOpenAiEmbeddingClient(
   options: EmbeddingProviderOptions,
 ): Promise<OpenAiEmbeddingClient> {
   const remote = options.remote;
-  const remoteApiKey = remote?.apiKey?.trim();
+  const remoteApiKey = resolveRemoteApiKey(remote?.apiKey);
   const remoteBaseUrl = remote?.baseUrl?.trim();
 
   const apiKey = remoteApiKey

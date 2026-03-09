@@ -1,19 +1,17 @@
-import { Type } from "@sinclair/typebox";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-
-import type { OpenClawConfig } from "../../config/config.js";
-import { loadConfig } from "../../config/config.js";
-import { stringEnum } from "../../agents/schema/typebox.js";
-import { createSlackWebClient } from "../../slack/client.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
-import { resolveSlackBotToken } from "../../slack/token.js";
-import { parseSlackTarget } from "../../slack/targets.js";
-import { readSlackMessages, getSlackMemberInfo } from "../../slack/actions.js";
-import type { SlackFile } from "../../slack/types.js";
-import { resolveSlackMedia } from "../../slack/monitor/media.js";
-import { jsonResult, readNumberParam, readStringParam } from "../../agents/tools/common.js";
-
+import { Type } from "@sinclair/typebox";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SlackFile } from "../../slack/types.js";
+import { stringEnum } from "../../agents/schema/typebox.js";
+import { jsonResult, readNumberParam, readStringParam } from "../../agents/tools/common.js";
+import { loadConfig } from "../../config/config.js";
+import { resolveSlackAccount } from "../../slack/accounts.js";
+import { readSlackMessages, getSlackMemberInfo } from "../../slack/actions.js";
+import { createSlackWebClient } from "../../slack/client.js";
+import { resolveSlackMedia } from "../../slack/monitor/media.js";
+import { parseSlackTarget } from "../../slack/targets.js";
+import { resolveSlackBotToken } from "../../slack/token.js";
 
 type SlackToolOptions = {
   config?: OpenClawConfig;
@@ -27,7 +25,9 @@ const SLACK_TOOL_ACTIONS = ["read", "user-info", "download-file", "upload-file"]
 const SlackToolSchema = Type.Object({
   action: stringEnum(SLACK_TOOL_ACTIONS, { description: "Slack action to perform." }),
 
-  accountId: Type.Optional(Type.String({ description: "Slack account id override (multi-account)." })),
+  accountId: Type.Optional(
+    Type.String({ description: "Slack account id override (multi-account)." }),
+  ),
 
   // read
   channelId: Type.Optional(
@@ -39,7 +39,7 @@ const SlackToolSchema = Type.Object({
   threadTs: Type.Optional(
     Type.String({
       description:
-        "Slack thread timestamp (thread_ts). Defaults to the current thread when invoked from Slack.",
+        "Slack thread timestamp (thread_ts). Defaults to the current thread only when channelId is also omitted.",
     }),
   ),
   limit: Type.Optional(
@@ -141,16 +141,21 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
       const cfg = options?.config ?? loadConfig();
       const params = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const action = readStringParam(params, "action", { required: true });
-      const accountId = readStringParam(params, "accountId") ?? options?.agentAccountId ?? undefined;
+      const accountId =
+        readStringParam(params, "accountId") ?? options?.agentAccountId ?? undefined;
 
       if (action === "read") {
-        const channelId =
-          readStringParam(params, "channelId") ?? options?.currentChannelId ?? undefined;
+        const explicitChannelId = readStringParam(params, "channelId");
+        const channelId = explicitChannelId ?? options?.currentChannelId ?? undefined;
         if (!channelId) {
-          throw new Error('Missing "channelId" (this tool defaults it only when invoked from Slack).');
+          throw new Error(
+            'Missing "channelId" (this tool defaults it only when invoked from Slack).',
+          );
         }
+        const explicitThreadTs = readStringParam(params, "threadTs");
         const threadTs =
-          readStringParam(params, "threadTs") ?? options?.currentThreadTs ?? undefined;
+          explicitThreadTs ??
+          (explicitChannelId ? undefined : (options?.currentThreadTs ?? undefined));
         const limit = readNumberParam(params, "limit", { integer: true }) ?? 10;
         const before = readStringParam(params, "before") ?? undefined;
         const after = readStringParam(params, "after") ?? undefined;
@@ -166,8 +171,7 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
           ok: true,
           messages: result.messages,
           hasMore: result.hasMore,
-          note:
-            "If you need more context, call slack.read again with before=<oldest ts you have> or after=<newest ts> and a new limit (e.g. 10).",
+          note: "If you need more context, call slack.read again with before=<oldest ts you have> or after=<newest ts> and a new limit (e.g. 10).",
         });
       }
 
@@ -209,10 +213,14 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
         const { token } = resolveSlackTokenAndAccountId({ cfg, accountId });
         const client = createSlackWebClient(token);
         const channelId = await resolveSlackUploadChannelId({ client, to });
-        const caption = readStringParam(params, "caption", { allowEmpty: true })?.trim() || undefined;
-        const threadTs = readStringParam(params, "uploadThreadTs") ?? options?.currentThreadTs ?? undefined;
+        const caption =
+          readStringParam(params, "caption", { allowEmpty: true })?.trim() || undefined;
+        const threadTs =
+          readStringParam(params, "uploadThreadTs") ?? options?.currentThreadTs ?? undefined;
 
-        const normalized = normalizeBase64Payload(readStringParam(params, "buffer", { trim: false }));
+        const normalized = normalizeBase64Payload(
+          readStringParam(params, "buffer", { trim: false }),
+        );
         const base64 = normalized.base64;
         if (!base64) {
           throw new Error('Missing "buffer" for upload-file (base64 or data: URL).');
@@ -232,7 +240,10 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
         };
 
         const res = await client.files.uploadV2(payload as any);
-        const parsed = res as { files?: Array<{ id?: string; name?: string }>; file?: { id?: string; name?: string } };
+        const parsed = res as {
+          files?: Array<{ id?: string; name?: string }>;
+          file?: { id?: string; name?: string };
+        };
         const fileId =
           parsed.files?.[0]?.id ?? parsed.file?.id ?? parsed.files?.[0]?.name ?? parsed.file?.name;
 

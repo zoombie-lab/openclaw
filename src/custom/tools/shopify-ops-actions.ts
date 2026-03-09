@@ -32,10 +32,52 @@ function requireEnv(name: string): string {
   return value;
 }
 
+function requireExplicitDateRange(
+  _action: "sales-analytics" | "chatbot-metrics" | "fulfillment-velocity",
+  params: Record<string, unknown>,
+): void {
+  readStringParam(params, "startDate", { required: true });
+  readStringParam(params, "endDate", { required: true });
+}
+
+function requireExplicitWindowsDays(
+  action: "refunds-metrics" | "returns-metrics",
+  params: Record<string, unknown>,
+): void {
+  const windowsDays = params.windowsDays;
+  const isValid =
+    Array.isArray(windowsDays) &&
+    windowsDays.length > 0 &&
+    windowsDays.every((value) => Number.isInteger(value) && Number(value) > 0);
+  if (!isValid) {
+    throw new Error(`${action} requires windowsDays as a non-empty array of positive integers`);
+  }
+}
+
+function validateShopifyOpsParams(
+  action: (typeof SHOPIFY_OPS_ACTIONS)[number],
+  params: Record<string, unknown>,
+): void {
+  switch (action) {
+    case "sales-analytics":
+    case "chatbot-metrics":
+    case "fulfillment-velocity":
+      requireExplicitDateRange(action, params);
+      return;
+    case "refunds-metrics":
+    case "returns-metrics":
+      requireExplicitWindowsDays(action, params);
+      return;
+    default:
+      return;
+  }
+}
+
 export async function handleShopifyOpsAction(
   params: Record<string, unknown>,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
+  validateShopifyOpsParams(action as (typeof SHOPIFY_OPS_ACTIONS)[number], params);
   const installationId = requireEnv("INSTALLATION_ID");
   const baseUrl = requireEnv("OPS_MANAGER_URL");
   const secret = requireEnv("OPS_SIGNING_SECRET");
@@ -86,7 +128,7 @@ export function createShopifyOpsTool(): AnyAgentTool {
     label: "Shopify Ops",
     name: "shopify_ops",
     description:
-      "Fetch Shopify metrics from ops-manager via signed requests. Pass an action plus its parameters (sales-analytics, inventory-analytics, fulfillment-velocity, refunds-metrics, returns-metrics, chatbot-metrics, search-orders, product-inventory, order-timeline, ops-snapshot).",
+      "Fetch Shopify metrics from ops-manager via signed requests. Pass an action plus its parameters (sales-analytics, inventory-analytics, fulfillment-velocity, refunds-metrics, returns-metrics, chatbot-metrics, search-orders, product-inventory, order-timeline, ops-snapshot). sales-analytics, chatbot-metrics, and fulfillment-velocity require explicit startDate and endDate. refunds-metrics and returns-metrics require explicit windowsDays.",
     parameters: ShopifyOpsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args && typeof args === "object" ? (args as Record<string, unknown>) : {};

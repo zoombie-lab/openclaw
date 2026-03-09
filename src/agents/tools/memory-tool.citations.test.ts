@@ -120,4 +120,30 @@ describe("memory search citations", () => {
     const details = result.details as { results: Array<{ snippet: string }> };
     expect(details.results[0]?.snippet).not.toMatch(/Source:/);
   });
+
+  it("passes time filters through to memory search", async () => {
+    backend = "builtin";
+    const cfg = {
+      memory: { citations: "off" },
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    const tool = createMemorySearchTool({ config: cfg });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+    await tool.execute("time_filter_pass_through", {
+      query: "what did we work on last week",
+      from: "2026-03-02T00:00:00.000Z",
+      to: "2026-03-08T23:59:59.999Z",
+      timezone: "America/New_York",
+    });
+    expect(stubManager.search).toHaveBeenCalledWith(
+      "what did we work on last week",
+      expect.objectContaining({
+        from: "2026-03-02T00:00:00.000Z",
+        to: "2026-03-08T23:59:59.999Z",
+        timezone: "America/New_York",
+      }),
+    );
+  });
 });

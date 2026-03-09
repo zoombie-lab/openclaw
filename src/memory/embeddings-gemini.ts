@@ -28,8 +28,13 @@ function resolveRemoteApiKey(remoteApiKey?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  if (trimmed === "GOOGLE_API_KEY" || trimmed === "GEMINI_API_KEY") {
-    return process.env[trimmed]?.trim();
+  // Allow config like remote.apiKey: "GEMINI_API_KEY" or "AI_GATEWAY_API_KEY".
+  if (/^[A-Z][A-Z0-9_]*$/.test(trimmed)) {
+    const fromEnv = process.env[trimmed]?.trim();
+    if (fromEnv) {
+      return fromEnv;
+    }
+    return undefined;
   }
   return trimmed;
 }

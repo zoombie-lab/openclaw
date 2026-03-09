@@ -1,5 +1,14 @@
 export type MemorySource = "memory" | "sessions";
 
+export type MemorySearchOptions = {
+  maxResults?: number;
+  minScore?: number;
+  sessionKey?: string;
+  from?: number | string;
+  to?: number | string;
+  timezone?: string;
+};
+
 export type MemorySearchResult = {
   path: string;
   startLine: number;
@@ -34,6 +43,23 @@ export type MemoryProviderStatus = {
   extraPaths?: string[];
   sources?: MemorySource[];
   sourceCounts?: Array<{ source: MemorySource; files: number; chunks: number }>;
+  sessions?: {
+    indexedFiles: number;
+    datedChunks: number;
+    earliestMessageTs?: number;
+    latestMessageTs?: number;
+    earliestDateBucket?: string;
+    latestDateBucket?: string;
+    parseFailures: number;
+    discovery?: {
+      candidateFiles: number;
+      indexableFiles: number;
+      totalBytes: number;
+      skippedTooLarge: number;
+      limitedByFileCount: boolean;
+      limitedByTotalBytes: boolean;
+    };
+  };
   cache?: { enabled: boolean; entries?: number; maxEntries?: number };
   fts?: { enabled: boolean; available: boolean; error?: string };
   fallback?: { from: string; reason?: string };
@@ -59,10 +85,7 @@ export type MemoryProviderStatus = {
 };
 
 export interface MemorySearchManager {
-  search(
-    query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
-  ): Promise<MemorySearchResult[]>;
+  search(query: string, opts?: MemorySearchOptions): Promise<MemorySearchResult[]>;
   readFile(params: {
     relPath: string;
     from?: number;

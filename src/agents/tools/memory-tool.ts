@@ -14,6 +14,9 @@ const MemorySearchSchema = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
   minScore: Type.Optional(Type.Number()),
+  from: Type.Optional(Type.Union([Type.Number(), Type.String()])),
+  to: Type.Optional(Type.Union([Type.Number(), Type.String()])),
+  timezone: Type.Optional(Type.String()),
 });
 
 const MemoryGetSchema = Type.Object({
@@ -41,12 +44,15 @@ export function createMemorySearchTool(options: {
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; pass from/to/timezone for time-bounded recalls; returns top snippets with path + lines.",
     parameters: MemorySearchSchema,
     execute: async (_toolCallId, params) => {
       const query = readStringParam(params, "query", { required: true });
       const maxResults = readNumberParam(params, "maxResults");
       const minScore = readNumberParam(params, "minScore");
+      const from = readTimeFilterParam(params, "from");
+      const to = readTimeFilterParam(params, "to");
+      const timezone = readStringParam(params, "timezone");
       const { manager, error } = await getMemorySearchManager({
         cfg,
         agentId,
@@ -64,6 +70,9 @@ export function createMemorySearchTool(options: {
           maxResults,
           minScore,
           sessionKey: options.agentSessionKey,
+          from,
+          to,
+          timezone,
         });
         const status = manager.status();
         const decorated = decorateCitations(rawResults, includeCitations);
@@ -85,6 +94,24 @@ export function createMemorySearchTool(options: {
       }
     },
   };
+}
+
+function readTimeFilterParam(
+  params: Record<string, unknown>,
+  key: "from" | "to",
+): number | string | undefined {
+  const raw = params[key];
+  if (raw == null) {
+    return undefined;
+  }
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  throw new Error(`${key} must be a number or string`);
 }
 
 export function createMemoryGetTool(options: {

@@ -323,6 +323,25 @@ export async function statusCommand(
     if (memoryPlugin.slot) {
       parts.push(`plugin ${memoryPlugin.slot}`);
     }
+    if (memory.sessions) {
+      parts.push(`sessions ${memory.sessions.indexedFiles} files`);
+      if (memory.sessions.earliestDateBucket && memory.sessions.latestDateBucket) {
+        parts.push(
+          `session dates ${memory.sessions.earliestDateBucket}..${memory.sessions.latestDateBucket}`,
+        );
+      }
+      const discovery = memory.sessions.discovery;
+      if (discovery && (discovery.limitedByFileCount || discovery.limitedByTotalBytes)) {
+        parts.push(
+          warn(
+            `session scan limited (files=${discovery.indexableFiles}, bytes=${discovery.totalBytes})`,
+          ),
+        );
+      }
+      if (memory.sessions.parseFailures > 0) {
+        parts.push(warn(`session parse failures ${memory.sessions.parseFailures}`));
+      }
+    }
     const colorByTone = (tone: Tone, text: string) =>
       tone === "ok" ? ok(text) : tone === "warn" ? warn(text) : muted(text);
     const vector = memory.vector;

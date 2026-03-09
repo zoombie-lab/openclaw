@@ -181,6 +181,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Time zone: America/Chicago");
   });
 
+  it("includes memory time-filter guidance and last-week resolution rule", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_search", "memory_get"],
+      userTimezone: "America/New_York",
+    });
+
+    expect(prompt).toContain("include explicit memory_search time filters: from, to, timezone");
+    expect(prompt).toContain("last week");
+    expect(prompt).toContain("previous Monday");
+  });
+
   it("shows timezone when only timezone is provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

@@ -165,6 +165,61 @@ describe("embedding provider remote overrides", () => {
     expect(headers["x-goog-api-key"]).toBe("gemini-key");
     expect(headers["Content-Type"]).toBe("application/json");
   });
+
+  it("treats missing env-backed Gemini remote apiKey as unset", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ embedding: { values: [1, 2, 3] } }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    const missingEnvKey = "OPENCLAW_TEST_MISSING_GEMINI_KEY";
+    const prev = process.env[missingEnvKey];
+    delete process.env[missingEnvKey];
+
+    try {
+      const { createEmbeddingProvider } = await import("./embeddings.js");
+      const authModule = await import("../agents/model-auth.js");
+      vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+        apiKey: "provider-key",
+        mode: "api-key",
+        source: "test",
+      });
+
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            },
+          },
+        },
+      };
+
+      const result = await createEmbeddingProvider({
+        config: cfg as never,
+        provider: "gemini",
+        remote: {
+          apiKey: missingEnvKey,
+        },
+        model: "text-embedding-004",
+        fallback: "openai",
+      });
+
+      await result.provider.embedQuery("hello");
+
+      expect(authModule.resolveApiKeyForProvider).toHaveBeenCalledTimes(1);
+      const headers = (fetchMock.mock.calls[0]?.[1]?.headers ?? {}) as Record<string, string>;
+      expect(headers["x-goog-api-key"]).toBe("provider-key");
+    } finally {
+      if (prev === undefined) {
+        delete process.env[missingEnvKey];
+      } else {
+        process.env[missingEnvKey] = prev;
+      }
+    }
+  });
 });
 
 describe("embedding provider auto selection", () => {

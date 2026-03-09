@@ -27,6 +27,8 @@ export async function searchVector(params: {
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
   sourceFilterVec: { sql: string; params: SearchSource[] };
   sourceFilterChunks: { sql: string; params: SearchSource[] };
+  timeFilterVec?: { sql: string; params: number[] };
+  timeFilterChunks?: { sql: string; params: number[] };
 }): Promise<SearchRowResult[]> {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
@@ -39,7 +41,7 @@ export async function searchVector(params: {
           `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
           `  FROM ${params.vectorTable} v\n` +
           `  JOIN chunks c ON c.id = v.id\n` +
-          ` WHERE c.model = ?${params.sourceFilterVec.sql}\n` +
+          ` WHERE c.model = ?${params.sourceFilterVec.sql}${params.timeFilterVec?.sql ?? ""}\n` +
           ` ORDER BY dist ASC\n` +
           ` LIMIT ?`,
       )
@@ -47,6 +49,7 @@ export async function searchVector(params: {
         vectorToBlob(params.queryVec),
         params.providerModel,
         ...params.sourceFilterVec.params,
+        ...(params.timeFilterVec?.params ?? []),
         params.limit,
       ) as Array<{
       id: string;
@@ -72,6 +75,7 @@ export async function searchVector(params: {
     db: params.db,
     providerModel: params.providerModel,
     sourceFilter: params.sourceFilterChunks,
+    timeFilter: params.timeFilterChunks,
   });
   const scored = candidates
     .map((chunk) => ({
@@ -97,6 +101,7 @@ export function listChunks(params: {
   db: DatabaseSync;
   providerModel: string;
   sourceFilter: { sql: string; params: SearchSource[] };
+  timeFilter?: { sql: string; params: number[] };
 }): Array<{
   id: string;
   path: string;
@@ -110,9 +115,13 @@ export function listChunks(params: {
     .prepare(
       `SELECT id, path, start_line, end_line, text, embedding, source\n` +
         `  FROM chunks\n` +
-        ` WHERE model = ?${params.sourceFilter.sql}`,
+        ` WHERE model = ?${params.sourceFilter.sql}${params.timeFilter?.sql ?? ""}`,
     )
-    .all(params.providerModel, ...params.sourceFilter.params) as Array<{
+    .all(
+      params.providerModel,
+      ...params.sourceFilter.params,
+      ...(params.timeFilter?.params ?? []),
+    ) as Array<{
     id: string;
     path: string;
     start_line: number;
@@ -141,6 +150,7 @@ export async function searchKeyword(params: {
   limit: number;
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: SearchSource[] };
+  timeFilter?: { sql: string; params: number[] };
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
 }): Promise<Array<SearchRowResult & { textScore: number }>> {
@@ -154,14 +164,22 @@ export async function searchKeyword(params: {
 
   const rows = params.db
     .prepare(
-      `SELECT id, path, source, start_line, end_line, text,\n` +
+      `SELECT ${params.ftsTable}.id, ${params.ftsTable}.path, ${params.ftsTable}.source,\n` +
+        `       ${params.ftsTable}.start_line, ${params.ftsTable}.end_line, ${params.ftsTable}.text,\n` +
         `       bm25(${params.ftsTable}) AS rank\n` +
         `  FROM ${params.ftsTable}\n` +
-        ` WHERE ${params.ftsTable} MATCH ? AND model = ?${params.sourceFilter.sql}\n` +
+        `  JOIN chunks c ON c.id = ${params.ftsTable}.id\n` +
+        ` WHERE ${params.ftsTable} MATCH ? AND ${params.ftsTable}.model = ?${params.sourceFilter.sql}${params.timeFilter?.sql ?? ""}\n` +
         ` ORDER BY rank ASC\n` +
         ` LIMIT ?`,
     )
-    .all(ftsQuery, params.providerModel, ...params.sourceFilter.params, params.limit) as Array<{
+    .all(
+      ftsQuery,
+      params.providerModel,
+      ...params.sourceFilter.params,
+      ...(params.timeFilter?.params ?? []),
+      params.limit,
+    ) as Array<{
     id: string;
     path: string;
     source: SearchSource;
