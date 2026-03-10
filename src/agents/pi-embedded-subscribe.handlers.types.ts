@@ -12,6 +12,7 @@ import type { NormalizedUsage } from "./usage.js";
 
 export type EmbeddedSubscribeLogger = {
   debug: (message: string) => void;
+  info: (message: string) => void;
   warn: (message: string) => void;
 };
 
