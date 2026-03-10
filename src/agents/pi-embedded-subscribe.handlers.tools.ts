@@ -411,8 +411,13 @@ export function handleToolExecutionEnd(
     ctx.state.toolStartTimes.delete(toolCallId);
   }
   const durationStr = toolStart ? ` duration=${endMs - toolStart.startMs}ms` : "";
+  const resultText = extractToolResultText(sanitizedResult);
+  const resultPreview = resultText
+    ? ` result=${resultText.length > 500 ? resultText.slice(0, 500) + "…" : resultText}`
+    : "";
+  const errorStr = isToolError ? " error=true" : "";
   ctx.log.info(
-    `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}${durationStr}`,
+    `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}${durationStr}${errorStr}${resultPreview}`,
   );
 
   if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {
