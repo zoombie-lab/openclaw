@@ -28,3 +28,21 @@ export function levelToMinLevel(level: LogLevel): number {
   };
   return map[level];
 }
+
+/**
+ * Return the tslog-native level ID for a given LogLevel.
+ * tslog uses: silly=0, trace=1, debug=2, info=3, warn=4, error=5, fatal=6.
+ * Used for transport-level filtering since attachTransport bypasses minLevel.
+ */
+export function tslogLevelId(level: LogLevel): number {
+  const map: Record<LogLevel, number> = {
+    trace: 1,
+    debug: 2,
+    info: 3,
+    warn: 4,
+    error: 5,
+    fatal: 6,
+    silent: Number.POSITIVE_INFINITY,
+  };
+  return map[level];
+}

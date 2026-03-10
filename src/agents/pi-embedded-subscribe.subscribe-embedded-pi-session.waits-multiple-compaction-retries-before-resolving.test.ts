@@ -97,6 +97,60 @@ describe("subscribeEmbeddedPiSession", () => {
       { phase: "end", willRetry: false },
     ]);
   });
+  it("clears tool trace state when compaction retries discard an attempt", async () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-compaction-trace-reset",
+      verboseLevel: "on",
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-finished",
+      args: { path: "/tmp/finished.txt" },
+    });
+    await Promise.resolve();
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "read",
+      toolCallId: "tool-finished",
+      isError: false,
+      result: "done",
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-inflight",
+      args: { path: "/tmp/inflight.txt" },
+    });
+    await Promise.resolve();
+
+    expect(subscription.getToolTrace()).toHaveLength(1);
+
+    handler?.({ type: "auto_compaction_end", willRetry: true });
+
+    expect(subscription.getToolTrace()).toEqual([]);
+
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "read",
+      toolCallId: "tool-inflight",
+      isError: false,
+      result: "late result",
+    });
+
+    expect(subscription.getToolTrace()).toEqual([]);
+  });
   it("emits tool summaries at tool start when verbose is on", async () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {

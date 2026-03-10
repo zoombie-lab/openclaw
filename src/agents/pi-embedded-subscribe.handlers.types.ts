@@ -21,11 +21,23 @@ export type ToolErrorSummary = {
   error?: string;
 };
 
+export type ToolTraceEntry = {
+  tool: string;
+  toolCallId: string;
+  args?: string;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  error?: boolean;
+};
+
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, string | undefined>;
   toolSummaryById: Set<string>;
+  toolStartTimes: Map<string, { startMs: number; args?: string }>;
+  toolTrace: ToolTraceEntry[];
   lastToolError?: ToolErrorSummary;
 
   blockReplyBreak: "text_end" | "message_end";

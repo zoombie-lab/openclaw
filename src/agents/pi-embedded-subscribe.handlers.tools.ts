@@ -242,6 +242,7 @@ export async function handleToolExecutionStart(
 
   const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
   ctx.state.toolMetaById.set(toolCallId, meta);
+  ctx.state.toolStartTimes.set(toolCallId, { startMs: Date.now(), args: argsSummary });
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}${argsSummary ? ` args=${argsSummary}` : ""}`,
   );
@@ -395,6 +396,20 @@ export function handleToolExecutionEnd(
     },
   });
 
+  const toolStart = ctx.state.toolStartTimes.get(toolCallId);
+  if (toolStart) {
+    const endMs = Date.now();
+    ctx.state.toolTrace.push({
+      tool: toolName,
+      toolCallId,
+      args: toolStart.args,
+      startMs: toolStart.startMs,
+      endMs,
+      durationMs: endMs - toolStart.startMs,
+      error: isToolError || undefined,
+    });
+    ctx.state.toolStartTimes.delete(toolCallId);
+  }
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );

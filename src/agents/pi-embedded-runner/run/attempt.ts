@@ -2,8 +2,10 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
+import type { ToolTraceEntry } from "../../pi-embedded-subscribe.handlers.types.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
@@ -275,6 +277,63 @@ export function wrapStreamFnWithTransportUsage<TArgs extends unknown[], TReturn>
   }) as (...args: TArgs) => TReturn;
 
   return wrapped;
+}
+
+type ToolTraceTranscriptEntry = {
+  type: "custom";
+  customType: "tool_trace";
+  id: string;
+  timestamp: string;
+  data: {
+    runId: string;
+    sessionId: string;
+    totalDurationMs: number;
+    toolCount: number;
+    tools: ToolTraceEntry[];
+  };
+};
+
+export function buildToolTraceTranscriptEntry(params: {
+  runId: string;
+  sessionId: string;
+  toolTrace: ToolTraceEntry[];
+  timestamp?: Date;
+}): ToolTraceTranscriptEntry | undefined {
+  const { runId, sessionId, toolTrace } = params;
+  if (toolTrace.length === 0) {
+    return undefined;
+  }
+  const firstStart = Math.min(...toolTrace.map((entry) => entry.startMs));
+  const lastEnd = Math.max(...toolTrace.map((entry) => entry.endMs));
+  return {
+    type: "custom",
+    customType: "tool_trace",
+    id: runId,
+    timestamp: (params.timestamp ?? new Date()).toISOString(),
+    data: {
+      runId,
+      sessionId,
+      totalDurationMs: lastEnd - firstStart,
+      toolCount: toolTrace.length,
+      tools: toolTrace,
+    },
+  };
+}
+
+export function flushPendingToolResultsAndAppendToolTrace(params: {
+  sessionManager?: ReturnType<typeof guardSessionManager>;
+  sessionFile?: string;
+  traceEntry?: ToolTraceTranscriptEntry;
+}) {
+  params.sessionManager?.flushPendingToolResults?.();
+  if (!params.traceEntry || !params.sessionFile) {
+    return;
+  }
+  try {
+    fsSync.appendFileSync(params.sessionFile, `${JSON.stringify(params.traceEntry)}\n`, "utf-8");
+  } catch {
+    // never block on trace write failures
+  }
 }
 
 export async function runEmbeddedAttempt(
@@ -567,6 +626,7 @@ export async function runEmbeddedAttempt(
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+    let pendingToolTraceEntry: ToolTraceTranscriptEntry | undefined;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -816,6 +876,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTargets,
         didSendViaMessagingTool,
         getLastToolError,
+        getToolTrace,
         getUsageTotals,
         getCompactionCount,
       } = subscription;
@@ -1058,6 +1119,13 @@ export async function runEmbeddedAttempt(
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
+
+      pendingToolTraceEntry = buildToolTraceTranscriptEntry({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        toolTrace: getToolTrace(),
+      });
+
       const transcriptUsage = getUsageTotals();
       const transportUsage = toNormalizedUsage(transportUsageTotals);
 
@@ -1085,7 +1153,11 @@ export async function runEmbeddedAttempt(
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.
-      sessionManager?.flushPendingToolResults?.();
+      flushPendingToolResultsAndAppendToolTrace({
+        sessionManager,
+        sessionFile: params.sessionFile,
+        traceEntry: pendingToolTraceEntry,
+      });
       session?.dispose();
       await sessionLock.release();
     }

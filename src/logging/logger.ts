@@ -5,7 +5,7 @@ import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ConsoleStyle } from "./console.js";
 import { readLoggingConfig } from "./config.js";
-import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { type LogLevel, normalizeLogLevel, tslogLevelId } from "./levels.js";
 import { loggingState } from "./state.js";
 
 // Pin to /tmp so mac Debug UI and docs match; os.tmpdir() can be a per-user
@@ -84,7 +84,7 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
   if (settings.level === "silent") {
     return false;
   }
-  return levelToMinLevel(level) <= levelToMinLevel(settings.level);
+  return tslogLevelId(level) >= tslogLevelId(settings.level);
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
@@ -95,12 +95,20 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   }
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
-    minLevel: levelToMinLevel(settings.level),
+    minLevel: tslogLevelId(settings.level),
     type: "hidden", // no ansi formatting
   });
 
+  // tslog's attachTransport bypasses minLevel filtering, so we filter manually.
+  const fileMinLevelId = tslogLevelId(settings.level);
   logger.attachTransport((logObj: LogObj) => {
     try {
+      const logLevelId = (logObj as Record<string, unknown>)._meta
+        ? ((logObj as Record<string, unknown>)._meta as Record<string, unknown>).logLevelId
+        : undefined;
+      if (typeof logLevelId === "number" && logLevelId < fileMinLevelId) {
+        return;
+      }
       const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
       const line = JSON.stringify({ ...logObj, time });
       fs.appendFileSync(settings.file, `${line}\n`, { encoding: "utf8" });
@@ -131,7 +139,7 @@ export function getChildLogger(
   opts?: { level?: LogLevel },
 ): TsLogger<LogObj> {
   const base = getLogger();
-  const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
+  const minLevel = opts?.level ? tslogLevelId(opts.level) : undefined;
   const name = bindings ? JSON.stringify(bindings) : undefined;
   return base.getSubLogger({
     name,
