@@ -10,6 +10,7 @@ export type ResolvedMemorySearchConfig = {
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
   provider: "openai" | "local" | "gemini" | "voyage" | "auto";
+  dimensions?: number;
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -126,6 +127,7 @@ function mergeConfig(
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const provider = overrides?.provider ?? defaults?.provider ?? "auto";
+  const dimensions = overrides?.dimensions ?? defaults?.dimensions;
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
   const hasRemoteConfig = Boolean(
@@ -257,6 +259,7 @@ function mergeConfig(
     sources,
     extraPaths,
     provider,
+    dimensions,
     remote,
     experimental: {
       sessionMemory,

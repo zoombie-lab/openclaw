@@ -48,6 +48,7 @@ export type EmbeddingProviderOptions = {
     headers?: Record<string, string>;
   };
   model: string;
+  dimensions?: number;
   fallback: "openai" | "gemini" | "local" | "voyage" | "none";
   local?: {
     modelPath?: string;

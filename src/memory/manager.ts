@@ -207,6 +207,7 @@ export class MemoryIndexManager implements MemorySearchManager {
       provider: settings.provider,
       remote: settings.remote,
       model: settings.model,
+      dimensions: settings.dimensions,
       fallback: settings.fallback,
       local: settings.local,
     });
@@ -1469,6 +1470,7 @@ export class MemoryIndexManager implements MemorySearchManager {
       provider: fallback,
       remote: this.settings.remote,
       model: fallbackModel,
+      dimensions: this.settings.dimensions,
       fallback: "none",
       local: this.settings.local,
     });

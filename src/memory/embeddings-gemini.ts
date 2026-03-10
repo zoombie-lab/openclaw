@@ -74,18 +74,23 @@ export async function createGeminiEmbeddingProvider(
   const baseUrl = client.baseUrl.replace(/\/$/, "");
   const embedUrl = `${baseUrl}/${client.modelPath}:embedContent`;
   const batchUrl = `${baseUrl}/${client.modelPath}:batchEmbedContents`;
+  const dimensions = options.dimensions;
 
   const embedQuery = async (text: string): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
+    const body: Record<string, unknown> = {
+      content: { parts: [{ text }] },
+      taskType: "RETRIEVAL_QUERY",
+    };
+    if (dimensions && dimensions > 0) {
+      body.outputDimensionality = dimensions;
+    }
     const res = await fetch(embedUrl, {
       method: "POST",
       headers: client.headers,
-      body: JSON.stringify({
-        content: { parts: [{ text }] },
-        taskType: "RETRIEVAL_QUERY",
-      }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const payload = await res.text();
@@ -99,11 +104,17 @@ export async function createGeminiEmbeddingProvider(
     if (texts.length === 0) {
       return [];
     }
-    const requests = texts.map((text) => ({
-      model: client.modelPath,
-      content: { parts: [{ text }] },
-      taskType: "RETRIEVAL_DOCUMENT",
-    }));
+    const requests = texts.map((text) => {
+      const req: Record<string, unknown> = {
+        model: client.modelPath,
+        content: { parts: [{ text }] },
+        taskType: "RETRIEVAL_DOCUMENT",
+      };
+      if (dimensions && dimensions > 0) {
+        req.outputDimensionality = dimensions;
+      }
+      return req;
+    });
     const res = await fetch(batchUrl, {
       method: "POST",
       headers: client.headers,
