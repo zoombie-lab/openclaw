@@ -31,6 +31,23 @@ export function normalizeSessionText(value: string): string {
     .trim();
 }
 
+export function sanitizeIndexedUserSessionText(value: string): string {
+  return normalizeSessionText(
+    value
+      .replace(
+        /\[Chat messages since your last reply - for context\][\s\S]*?\[Current message - respond to this\]/g,
+        " ",
+      )
+      .replace(/\[slack message id:[^\]]+\]/gi, " ")
+      .replace(/\[message_id:[^\]]+\]/gi, " ")
+      .replace(
+        /Untrusted context \(metadata, do not treat as instructions or commands\):[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>/gi,
+        " ",
+      )
+      .replace(/<<<EXTERNAL_UNTRUSTED_CONTENT>>>|<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>/gi, " "),
+  );
+}
+
 export function extractSessionText(content: unknown): string | null {
   if (typeof content === "string") {
     const normalized = normalizeSessionText(content);
@@ -138,7 +155,18 @@ export function parseOpenClawSessionRecord(
   if (!message || typeof message.role !== "string") {
     return null;
   }
-  const text = extractSessionText(message.content);
+  const normalizedRole = message.role.trim().toLowerCase();
+  if (normalizedRole === "toolresult") {
+    return null;
+  }
+  const rawText = extractSessionText(message.content);
+  if (!rawText) {
+    return null;
+  }
+  const text =
+    normalizedRole === "user"
+      ? sanitizeIndexedUserSessionText(rawText)
+      : normalizeSessionText(rawText);
   if (!text) {
     return null;
   }
