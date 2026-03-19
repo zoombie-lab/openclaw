@@ -265,13 +265,49 @@ describe("cron tool", () => {
     expect(call.params?.agentId).toBeNull();
   });
 
-  it("infers delivery from threaded session keys", async () => {
+  it("prefers stored session delivery context over threaded session keys", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
+    loadSessionStoreMock.mockReturnValue({
+      "agent:main:slack:channel:general:thread:1699999999.0001": {
+        sessionId: "sid",
+        updatedAt: 1,
+        deliveryContext: {
+          channel: "slack",
+          to: "channel:C0AE3L0RHGB",
+          threadId: "1699999999.0001",
+        },
+      },
+    });
 
     const tool = createCronTool({
       agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
     });
     await tool.execute("call-thread", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
+    };
+    expect(call?.params?.delivery).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "channel:C0AE3L0RHGB",
+    });
+  });
+
+  it("falls back to parsing session keys when no stored delivery context exists", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({
+      agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
+    });
+    await tool.execute("call-thread-fallback", {
       action: "add",
       job: {
         name: "reminder",

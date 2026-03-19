@@ -202,10 +202,11 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
           token,
           maxBytes,
         });
-        if (!resolved) {
+        const firstResolved = resolved[0];
+        if (!firstResolved) {
           throw new Error("Failed to download Slack file (or file was too large).");
         }
-        return jsonResult({ ok: true, ...resolved });
+        return jsonResult({ ok: true, ...firstResolved });
       }
 
       if (action === "upload-file") {
@@ -227,7 +228,10 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
         }
 
         const buffer = Buffer.from(base64, "base64");
-        const filename = readStringParam(params, "filename") ?? "upload.bin";
+        const filename =
+          readStringParam(params, "filename") ??
+          readStringParam(params, "fileName") ??
+          "upload.bin";
         const contentType =
           readStringParam(params, "contentType") ?? normalized.contentType ?? undefined;
 

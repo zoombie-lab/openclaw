@@ -5,6 +5,7 @@ import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
@@ -172,10 +173,41 @@ function stripThreadSuffixFromSessionKey(sessionKey: string): string {
   return parent ? parent : sessionKey;
 }
 
+function loadResolvedSessionEntry(agentSessionKey?: string) {
+  const sessionKey = agentSessionKey?.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  try {
+    const cfg = loadConfig();
+    const { mainKey, alias } = resolveMainSessionAlias(cfg);
+    const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+    const parsed = parseAgentSessionKey(resolvedKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: parsed?.agentId });
+    const store = loadSessionStore(storePath);
+    return {
+      cfg,
+      resolvedKey,
+      entry: store[resolvedKey],
+    };
+  } catch {
+    return null;
+  }
+}
+
 function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
   const rawSessionKey = agentSessionKey?.trim();
   if (!rawSessionKey) {
     return null;
+  }
+  const resolved = loadResolvedSessionEntry(rawSessionKey);
+  const sessionDelivery = deliveryContextFromSession(resolved?.entry);
+  if (sessionDelivery?.to) {
+    const delivery: CronDelivery = { mode: "announce", to: sessionDelivery.to };
+    if (typeof sessionDelivery.channel === "string" && sessionDelivery.channel.trim()) {
+      delivery.channel = sessionDelivery.channel.trim().toLowerCase() as CronMessageChannel;
+    }
+    return delivery;
   }
   const parsed = parseAgentSessionKey(stripThreadSuffixFromSessionKey(rawSessionKey));
   if (!parsed || !parsed.rest) {
@@ -240,13 +272,7 @@ function resolveSessionTimezoneFromSessionKey(agentSessionKey?: string): string 
     return null;
   }
   try {
-    const cfg = loadConfig();
-    const { mainKey, alias } = resolveMainSessionAlias(cfg);
-    const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
-    const parsed = parseAgentSessionKey(resolvedKey);
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: parsed?.agentId });
-    const store = loadSessionStore(storePath);
-    const rawTz = store[resolvedKey]?.origin?.senderTimezone;
+    const rawTz = loadResolvedSessionEntry(sessionKey)?.entry?.origin?.senderTimezone;
     if (typeof rawTz !== "string") {
       return null;
     }

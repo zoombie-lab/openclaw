@@ -4,6 +4,12 @@ import type { SlackFile } from "../types.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 
+export type SlackResolvedMedia = {
+  path: string;
+  contentType?: string;
+  placeholder: string;
+};
+
 function normalizeHostname(hostname: string): string {
   const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
   if (normalized.startsWith("[") && normalized.endsWith("]")) {
@@ -119,12 +125,9 @@ export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
   maxBytes: number;
-}): Promise<{
-  path: string;
-  contentType?: string;
-  placeholder: string;
-} | null> {
+}): Promise<SlackResolvedMedia[]> {
   const files = params.files ?? [];
+  const resolved: SlackResolvedMedia[] = [];
   for (const file of files) {
     const url = file.url_private_download ?? file.url_private;
     if (!url) {
@@ -141,6 +144,15 @@ export async function resolveSlackMedia(params: {
         filePathHint: file.name,
         maxBytes: params.maxBytes,
       });
+      const contentType = (fetched.contentType ?? file.mimetype ?? "").trim().toLowerCase();
+      const prefix = fetched.buffer.subarray(0, 256).toString("utf8").toLowerCase();
+      if (
+        contentType.startsWith("text/html") ||
+        prefix.includes("<html") ||
+        prefix.includes("<!doctype html")
+      ) {
+        continue;
+      }
       if (fetched.buffer.byteLength > params.maxBytes) {
         continue;
       }
@@ -151,16 +163,16 @@ export async function resolveSlackMedia(params: {
         params.maxBytes,
       );
       const label = fetched.fileName ?? file.name;
-      return {
+      resolved.push({
         path: saved.path,
         contentType: saved.contentType,
         placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
-      };
+      });
     } catch {
       // Ignore download failures and fall through to the next file.
     }
   }
-  return null;
+  return resolved;
 }
 
 export type SlackThreadStarter = {
@@ -225,7 +237,7 @@ export async function resolveSlackThreadStarter(params: {
     })) as { messages?: Array<{ text?: string; user?: string; ts?: string; files?: SlackFile[] }> };
     const message = response?.messages?.[0];
     const text = (message?.text ?? "").trim();
-    if (!message || !text) {
+    if (!message || (!text && (message.files?.length ?? 0) === 0)) {
       return null;
     }
     const starter: SlackThreadStarter = {

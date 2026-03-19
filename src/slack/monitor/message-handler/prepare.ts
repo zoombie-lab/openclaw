@@ -47,10 +47,25 @@ import { resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import {
   hasSlackThreadParticipant,
+  type SlackResolvedMedia,
   resolveSlackMedia,
   resolveSlackThreadMessages,
   resolveSlackThreadStarter,
 } from "../media.js";
+
+function joinSlackFilePlaceholders(files?: Array<{ name?: string }>): string {
+  const placeholders = (files ?? []).map((file) =>
+    file?.name ? `[Slack file: ${file.name}]` : "[Slack file]",
+  );
+  return placeholders.filter(Boolean).join("\n");
+}
+
+function joinResolvedSlackMediaPlaceholders(media: SlackResolvedMedia[]): string {
+  return media
+    .map((entry) => entry.placeholder.trim())
+    .filter(Boolean)
+    .join("\n");
+}
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
@@ -343,11 +358,7 @@ export async function prepareSlackMessage(params: {
   if (isRoom && shouldRequireMention && mentionGate.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
-    const fallbackFile = message.files?.[0]?.name
-      ? `[Slack file: ${message.files[0].name}]`
-      : message.files?.length
-        ? "[Slack file]"
-        : "";
+    const fallbackFile = joinSlackFilePlaceholders(message.files);
     const pendingBody = pendingText || fallbackFile;
     recordPendingHistoryEntryIfEnabled({
       historyMap: ctx.channelHistories,
@@ -370,7 +381,7 @@ export async function prepareSlackMessage(params: {
     token: ctx.botToken,
     maxBytes: ctx.mediaMaxBytes,
   });
-  const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
+  const rawBody = (message.text ?? "").trim() || joinResolvedSlackMediaPlaceholders(media) || "";
   if (!rawBody) {
     return null;
   }
@@ -455,17 +466,19 @@ export async function prepareSlackMessage(params: {
 
   let threadStarterBody: string | undefined;
   let threadLabel: string | undefined;
-  let threadStarterMedia: Awaited<ReturnType<typeof resolveSlackMedia>> = null;
+  let threadStarterMedia: SlackResolvedMedia[] = [];
   if (isThreadReply && threadTs) {
     const starter = await resolveSlackThreadStarter({
       channelId: message.channel,
       threadTs,
       client: ctx.app.client,
     });
-    if (starter?.text) {
+    if (starter) {
       const starterUser = starter.userId ? await ctx.resolveUserName(starter.userId) : null;
       const starterName = starterUser?.name ?? starter.userId ?? "Unknown";
-      const starterWithId = `${starter.text}\n[slack message id: ${starter.ts ?? threadTs} channel: ${message.channel}]`;
+      const starterRawBody =
+        starter.text.trim() || joinSlackFilePlaceholders(starter.files) || "[Slack message]";
+      const starterWithId = `${starterRawBody}\n[slack message id: ${starter.ts ?? threadTs} channel: ${message.channel}]`;
       threadStarterBody = formatThreadStarterEnvelope({
         channel: "Slack",
         author: starterName,
@@ -473,18 +486,20 @@ export async function prepareSlackMessage(params: {
         body: starterWithId,
         envelope: envelopeOptions,
       });
-      const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
+      const snippet = starterRawBody.replace(/\s+/g, " ").slice(0, 80);
       threadLabel = `Slack thread ${roomLabel}${snippet ? `: ${snippet}` : ""}`;
       // If current message has no files but thread starter does, fetch starter's files
-      if (!media && starter.files && starter.files.length > 0) {
+      if (media.length === 0 && starter.files && starter.files.length > 0) {
         threadStarterMedia = await resolveSlackMedia({
           files: starter.files,
           token: ctx.botToken,
           maxBytes: ctx.mediaMaxBytes,
         });
-        if (threadStarterMedia) {
+        if (threadStarterMedia.length > 0) {
           logVerbose(
-            `slack: hydrated thread starter file ${threadStarterMedia.placeholder} from root message`,
+            `slack: hydrated thread starter file(s) ${threadStarterMedia
+              .map((entry) => entry.placeholder)
+              .join(", ")} from root message`,
           );
         }
       }
@@ -502,11 +517,7 @@ export async function prepareSlackMessage(params: {
     });
     const threadContextEntries: string[] = [];
     for (const threadMessage of threadMessages) {
-      const fallbackFile = threadMessage.files?.[0]?.name
-        ? `[Slack file: ${threadMessage.files[0].name}]`
-        : threadMessage.files?.length
-          ? "[Slack file]"
-          : "";
+      const fallbackFile = joinSlackFilePlaceholders(threadMessage.files);
       const messageBody = (threadMessage.text ?? "").trim() || fallbackFile;
       if (!messageBody) {
         continue;
@@ -560,7 +571,9 @@ export async function prepareSlackMessage(params: {
   }
 
   // Use thread starter media if current message has none
-  const effectiveMedia = media ?? threadStarterMedia;
+  const effectiveMedia = media.length > 0 ? media : threadStarterMedia;
+  const effectiveMediaPaths = effectiveMedia.map((entry) => entry.path);
+  const effectiveMediaTypes = effectiveMedia.map((entry) => entry.contentType).filter(Boolean);
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -591,9 +604,12 @@ export async function prepareSlackMessage(params: {
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
-    MediaPath: effectiveMedia?.path,
-    MediaType: effectiveMedia?.contentType,
-    MediaUrl: effectiveMedia?.path,
+    MediaPath: effectiveMedia[0]?.path,
+    MediaType: effectiveMedia[0]?.contentType,
+    MediaUrl: effectiveMedia[0]?.path,
+    MediaPaths: effectiveMediaPaths.length > 0 ? effectiveMediaPaths : undefined,
+    MediaUrls: effectiveMediaPaths.length > 0 ? effectiveMediaPaths : undefined,
+    MediaTypes: effectiveMediaTypes.length > 0 ? effectiveMediaTypes : undefined,
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,

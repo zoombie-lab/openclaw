@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createNotionTool } from "../custom/tools/notion-tool.js";
 import { createShopifyOpsTool } from "../custom/tools/shopify-ops-actions.js";
 import { createSlackTool } from "../custom/tools/slack-tool.js";
 import { resolvePluginTools } from "../plugins/tools.js";
@@ -9,8 +10,8 @@ import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import { createCronTool } from "./tools/cron-tool.js";
-import { createEditImageTool } from "./tools/edit-image-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -70,6 +71,12 @@ export function createOpenClawTools(options?: {
         modelHasVision: options?.modelHasVision,
       })
     : null;
+  const imageGenerateTool = createImageGenerateTool({
+    config: options?.config,
+    agentDir: options?.agentDir,
+    sandboxRoot: options?.sandboxRoot,
+    workspaceDir: options?.workspaceDir,
+  });
   const webSearchTool = createWebSearchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
@@ -107,12 +114,7 @@ export function createOpenClawTools(options?: {
       sandboxRoot: options?.sandboxRoot,
       workspaceDir: options?.workspaceDir,
     }),
-    createEditImageTool({
-      config: options?.config,
-      agentDir: options?.agentDir,
-      sandboxRoot: options?.sandboxRoot,
-      workspaceDir: options?.workspaceDir,
-    }),
+    ...(imageGenerateTool ? [imageGenerateTool] : []),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
     }),
@@ -172,6 +174,7 @@ export function createOpenClawTools(options?: {
         ]
       : []),
     createShopifyOpsTool(),
+    createNotionTool(),
   ];
 
   const pluginTools = resolvePluginTools({

@@ -29,6 +29,13 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    imageGenerationModel: z
+      .object({
+        primary: z.string().optional(),
+        fallbacks: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     models: z
       .record(
         z.string(),

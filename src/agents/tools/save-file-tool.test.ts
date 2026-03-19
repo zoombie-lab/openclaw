@@ -36,7 +36,7 @@ describe("save_file tool", () => {
     expect(written).toBe("hello world");
     expect(result.content?.[0]).toMatchObject({
       type: "text",
-      text: "Saved file: ./artifacts/report.txt\nMEDIA:./artifacts/report.txt",
+      text: "Saved file: ./artifacts/report.txt\nReuse this local path with message(filePath/path/media) or image_generate(image/images).\nMEDIA:./artifacts/report.txt",
     });
     expect(result.details).toMatchObject({
       displayPath: "./artifacts/report.txt",
@@ -64,12 +64,31 @@ describe("save_file tool", () => {
     });
   });
 
+  it("accepts source as an alias for url/local copy inputs", async () => {
+    const sandboxRoot = await makeSandbox();
+    const sourcePath = path.join(sandboxRoot, "input.csv");
+    await fs.writeFile(sourcePath, "a,b\n1,2\n", "utf8");
+    const tool = createSaveFileTool({ sandboxRoot });
+
+    const result = await tool.execute("call-3", {
+      path: "artifacts/report.csv",
+      source: "./input.csv",
+    });
+
+    const written = await fs.readFile(path.join(sandboxRoot, "artifacts", "report.csv"), "utf8");
+    expect(written).toBe("a,b\n1,2\n");
+    expect(result.details).toMatchObject({
+      displayPath: "./artifacts/report.csv",
+      source: "url",
+    });
+  });
+
   it("rejects paths that escape the sandbox root", async () => {
     const sandboxRoot = await makeSandbox();
     const tool = createSaveFileTool({ sandboxRoot });
 
     await expect(
-      tool.execute("call-3", {
+      tool.execute("call-4", {
         path: "../escape.txt",
         text: "nope",
       }),

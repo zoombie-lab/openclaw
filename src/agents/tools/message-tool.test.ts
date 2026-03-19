@@ -160,6 +160,15 @@ describe("message tool description", () => {
 
     setActivePluginRegistry(createTestRegistry([]));
   });
+
+  it("tells the model to use save_file before delivering attachments", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+
+    expect(tool.description).toContain("Use save_file to create/download/stage files first");
+    expect(tool.description).toContain("media/path/filePath");
+  });
 });
 
 describe("message tool sandbox passthrough", () => {

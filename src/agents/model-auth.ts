@@ -18,7 +18,11 @@ import {
 } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+export {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
@@ -290,6 +294,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const envMap: Record<string, string> = {
     openai: "OPENAI_API_KEY",
     google: "GEMINI_API_KEY",
+    fal: "FAL_KEY",
     voyage: "VOYAGE_API_KEY",
     groq: "GROQ_API_KEY",
     deepgram: "DEEPGRAM_API_KEY",

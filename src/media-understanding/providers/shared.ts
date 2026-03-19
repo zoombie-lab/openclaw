@@ -46,6 +46,27 @@ export async function fetchWithTimeoutGuarded(
   });
 }
 
+export async function postJsonRequest(params: {
+  url: string;
+  headers: Headers;
+  body: unknown;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+  allowPrivateNetwork?: boolean;
+}) {
+  return fetchWithTimeoutGuarded(
+    params.url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: JSON.stringify(params.body),
+    },
+    params.timeoutMs,
+    params.fetchFn,
+    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+  );
+}
+
 export async function readErrorResponse(res: Response): Promise<string | undefined> {
   try {
     const text = await res.text();
@@ -60,4 +81,13 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
   } catch {
     return undefined;
   }
+}
+
+export async function assertOkOrThrowHttpError(res: Response, label: string): Promise<void> {
+  if (res.ok) {
+    return;
+  }
+  const detail = await readErrorResponse(res);
+  const suffix = detail ? `: ${detail}` : "";
+  throw new Error(`${label} (HTTP ${res.status})${suffix}`);
 }

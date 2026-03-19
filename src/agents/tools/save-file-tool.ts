@@ -51,7 +51,7 @@ export function createSaveFileTool(options?: {
     label: "Save File",
     name: "save_file",
     description:
-      "Save a file in the workspace from text, a base64 payload/data URL, or a URL/path. Use attach=true to include a MEDIA line for the saved file.",
+      "Canonical workspace file tool. Use it to create CSV/JSON/text files, decode base64/data URLs, copy local files, download URLs into the workspace, and stage files for message/image_generate. Use attach=true to include a MEDIA line for the saved file.",
     parameters: Type.Object({
       path: Type.String({
         description: "Output path inside the workspace or sandbox (relative paths recommended).",
@@ -62,9 +62,15 @@ export function createSaveFileTool(options?: {
           description: "Base64 payload for the file. data: URLs are also accepted.",
         }),
       ),
-      url: Type.Optional(
+      source: Type.Optional(
         Type.String({
           description: "HTTP(S), file://, or local path to copy into the output file.",
+        }),
+      ),
+      url: Type.Optional(
+        Type.String({
+          description:
+            "Alias for source. HTTP(S), file://, or local path to copy into the output file.",
         }),
       ),
       contentType: Type.Optional(Type.String()),
@@ -81,13 +87,15 @@ export function createSaveFileTool(options?: {
 
       const hasText = typeof record.text === "string";
       const hasBuffer = typeof record.buffer === "string";
+      const hasSource = typeof record.source === "string";
       const hasUrl = typeof record.url === "string";
-      const sourceCount = Number(hasText) + Number(hasBuffer) + Number(hasUrl);
+      const hasCopySource = hasSource || hasUrl;
+      const sourceCount = Number(hasText) + Number(hasBuffer) + Number(hasCopySource);
       if (sourceCount === 0) {
-        throw new Error("Provide exactly one source: text, buffer, or url");
+        throw new Error("Provide exactly one source: text, buffer, source, or url");
       }
       if (sourceCount > 1) {
-        throw new Error("Only one source is allowed: text, buffer, or url");
+        throw new Error("Only one source is allowed: text, buffer, source, or url");
       }
 
       const resolved = await assertSandboxPath({
@@ -126,7 +134,7 @@ export function createSaveFileTool(options?: {
         contentType = contentType ?? "text/plain";
         source = "text";
       } else {
-        let urlTarget = String(record.url).trim();
+        let urlTarget = String(hasSource ? record.source : record.url).trim();
         if (!/^https?:\/\//i.test(urlTarget)) {
           let localPath = urlTarget;
           if (localPath.startsWith("file://")) {
@@ -152,7 +160,10 @@ export function createSaveFileTool(options?: {
       }
 
       const displayPath = buildDisplayPath({ filePath: resolved.resolved, root });
-      const lines = [`Saved file: ${displayPath}`];
+      const lines = [
+        `Saved file: ${displayPath}`,
+        `Reuse this local path with message(filePath/path/media) or image_generate(image/images).`,
+      ];
       if (attach) {
         lines.push(`MEDIA:${displayPath}`);
       }

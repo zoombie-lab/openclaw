@@ -190,7 +190,14 @@ describe("resolveSlackMedia", () => {
   });
 
   it("prefers url_private_download over url_private", async () => {
-    // Mock the store module
+    const fetchRemoteMedia = vi.fn().mockResolvedValue({
+      buffer: Buffer.from("image data"),
+      contentType: "image/jpeg",
+      fileName: "test.jpg",
+    });
+    vi.doMock("../../media/fetch.js", () => ({
+      fetchRemoteMedia,
+    }));
     vi.doMock("../../media/store.js", () => ({
       saveMediaBuffer: vi.fn().mockResolvedValue({
         path: "/tmp/test.jpg",
@@ -199,12 +206,6 @@ describe("resolveSlackMedia", () => {
     }));
 
     const { resolveSlackMedia } = await import("./media.js");
-
-    const mockResponse = new Response(Buffer.from("image data"), {
-      status: 200,
-      headers: { "content-type": "image/jpeg" },
-    });
-    mockFetch.mockResolvedValueOnce(mockResponse);
 
     await resolveSlackMedia({
       files: [
@@ -218,17 +219,18 @@ describe("resolveSlackMedia", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://files.slack.com/download.jpg",
-      expect.anything(),
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://files.slack.com/download.jpg",
+      }),
     );
   });
 
   it("returns null when download fails", async () => {
+    vi.doMock("../../media/fetch.js", () => ({
+      fetchRemoteMedia: vi.fn().mockRejectedValue(new Error("Network error")),
+    }));
     const { resolveSlackMedia } = await import("./media.js");
-
-    // Simulate a network error
-    mockFetch.mockRejectedValueOnce(new Error("Network error"));
 
     const result = await resolveSlackMedia({
       files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
@@ -236,7 +238,7 @@ describe("resolveSlackMedia", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
   });
 
   it("returns null when no files are provided", async () => {
@@ -248,7 +250,7 @@ describe("resolveSlackMedia", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
   });
 
   it("skips files without url_private", async () => {
@@ -260,12 +262,22 @@ describe("resolveSlackMedia", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("falls through to next file when first file returns error", async () => {
-    // Mock the store module
+    const fetchRemoteMedia = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("404"))
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("image data"),
+        contentType: "image/jpeg",
+        fileName: "second.jpg",
+      });
+    vi.doMock("../../media/fetch.js", () => ({
+      fetchRemoteMedia,
+    }));
     vi.doMock("../../media/store.js", () => ({
       saveMediaBuffer: vi.fn().mockResolvedValue({
         path: "/tmp/test.jpg",
@@ -274,16 +286,48 @@ describe("resolveSlackMedia", () => {
     }));
 
     const { resolveSlackMedia } = await import("./media.js");
-
-    // First file: 404
-    const errorResponse = new Response("Not Found", { status: 404 });
-    // Second file: success
-    const successResponse = new Response(Buffer.from("image data"), {
-      status: 200,
-      headers: { "content-type": "image/jpeg" },
+    const result = await resolveSlackMedia({
+      files: [
+        { url_private: "https://files.slack.com/first.jpg", name: "first.jpg" },
+        { url_private: "https://files.slack.com/second.jpg", name: "second.jpg" },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
     });
 
-    mockFetch.mockResolvedValueOnce(errorResponse).mockResolvedValueOnce(successResponse);
+    expect(result).toHaveLength(1);
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves multiple successfully resolved files in order", async () => {
+    vi.doMock("../../media/fetch.js", () => ({
+      fetchRemoteMedia: vi
+        .fn()
+        .mockResolvedValueOnce({
+          buffer: Buffer.from("image-one"),
+          contentType: "image/jpeg",
+          fileName: "first.jpg",
+        })
+        .mockResolvedValueOnce({
+          buffer: Buffer.from("image-two"),
+          contentType: "image/jpeg",
+          fileName: "second.jpg",
+        }),
+    }));
+    vi.doMock("../../media/store.js", () => ({
+      saveMediaBuffer: vi
+        .fn()
+        .mockResolvedValueOnce({
+          path: "/tmp/first.jpg",
+          contentType: "image/jpeg",
+        })
+        .mockResolvedValueOnce({
+          path: "/tmp/second.jpg",
+          contentType: "image/jpeg",
+        }),
+    }));
+
+    const { resolveSlackMedia } = await import("./media.js");
 
     const result = await resolveSlackMedia({
       files: [
@@ -294,7 +338,17 @@ describe("resolveSlackMedia", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).not.toBeNull();
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([
+      {
+        path: "/tmp/first.jpg",
+        contentType: "image/jpeg",
+        placeholder: "[Slack file: first.jpg]",
+      },
+      {
+        path: "/tmp/second.jpg",
+        contentType: "image/jpeg",
+        placeholder: "[Slack file: second.jpg]",
+      },
+    ]);
   });
 });
