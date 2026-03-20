@@ -198,6 +198,8 @@ async function resolveSandboxedImagePath(params: {
     return { resolved: out.resolved };
   } catch (err) {
     const name = path.basename(filePath);
+    // Match the shared inbound-media convention: manipulated inbound files should be
+    // referenced from workspace-local media/inbound/... across all chat channels.
     const candidateRel = path.join("media", "inbound", name);
     const candidateAbs = path.join(params.sandboxRoot, candidateRel);
     try {

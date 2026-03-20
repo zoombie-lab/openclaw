@@ -170,6 +170,8 @@ export function createOpenClawTools(options?: {
             agentAccountId: options?.agentAccountId,
             currentChannelId: options?.currentChannelId,
             currentThreadTs: options?.currentThreadTs,
+            sandboxRoot: options?.sandboxRoot,
+            workspaceDir: options?.workspaceDir,
           }),
         ]
       : []),

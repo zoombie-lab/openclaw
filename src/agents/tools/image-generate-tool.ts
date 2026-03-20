@@ -484,6 +484,9 @@ async function resolveSandboxedImagePath(params: {
     return { resolved: out.resolved };
   } catch (err) {
     const name = path.basename(filePath);
+    // Cross-channel canonical rule for manipulated inbound media: if a channel-specific
+    // downloader/stager has prepared the asset for the agent, it should live at
+    // workspace-local media/inbound/... regardless of Slack/Discord/Telegram/etc.
     const candidateRel = path.join("media", "inbound", name);
     const candidateAbs = path.join(params.sandboxRoot, candidateRel);
     try {

@@ -38,7 +38,7 @@ export async function stageSandboxMedia(params: {
 
   // For remote attachments without sandbox, use ~/.openclaw/media (not agent workspace for privacy).
   // For local attachments without sandbox, still stage into the agent workspace so tools only see
-  // workspace-relative media paths instead of absolute host paths like /data/media/inbound/...
+  // the canonical workspace-relative media path shape: media/inbound/...
   const remoteMediaCacheDir = ctx.MediaRemoteHost
     ? path.join(CONFIG_DIR, "media", "remote-cache", sessionKey)
     : null;

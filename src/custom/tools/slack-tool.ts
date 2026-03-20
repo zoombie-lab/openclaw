@@ -1,15 +1,17 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SlackFile } from "../../slack/types.js";
+import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { stringEnum } from "../../agents/schema/typebox.js";
 import { jsonResult, readNumberParam, readStringParam } from "../../agents/tools/common.js";
 import { loadConfig } from "../../config/config.js";
+import { getMediaDir } from "../../media/store.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
-import { readSlackMessages, getSlackMemberInfo } from "../../slack/actions.js";
+import { downloadSlackFile, readSlackMessages, getSlackMemberInfo } from "../../slack/actions.js";
 import { createSlackWebClient } from "../../slack/client.js";
-import { resolveSlackMedia } from "../../slack/monitor/media.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { resolveSlackBotToken } from "../../slack/token.js";
 
@@ -18,6 +20,8 @@ type SlackToolOptions = {
   agentAccountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
+  sandboxRoot?: string;
+  workspaceDir?: string;
 };
 
 const SLACK_TOOL_ACTIONS = ["read", "user-info", "download-file", "upload-file"] as const;
@@ -55,13 +59,11 @@ const SlackToolSchema = Type.Object({
   userId: Type.Optional(Type.String({ description: "Slack user id (U...)." })),
 
   // download-file
-  url: Type.Optional(
+  fileId: Type.Optional(
     Type.String({
-      description:
-        "Slack file URL (url_private or url_private_download). Must be a Slack-hosted HTTPS URL.",
+      description: "Slack file id (F...). The tool fetches fresh metadata before downloading.",
     }),
   ),
-  fileName: Type.Optional(Type.String({ description: "Optional filename hint for downloads." })),
   maxBytes: Type.Optional(
     Type.Number({ description: "Max bytes to download (defaults to Slack mediaMaxMb or 10MB)." }),
   ),
@@ -130,6 +132,53 @@ async function resolveSlackUploadChannelId(params: {
   return channelId;
 }
 
+async function stageDownloadedMediaIntoWorkspace(params: {
+  sourcePath: string;
+  sandboxRoot?: string;
+  workspaceDir?: string;
+}): Promise<{ absolutePath: string; displayPath: string } | null> {
+  // Canonical rule for manipulated Slack media: once we have agent workspace context,
+  // stage into workspace-local media/inbound/... and return that path shape to the model.
+  const root = params.sandboxRoot?.trim() || params.workspaceDir?.trim();
+  if (!root) {
+    return null;
+  }
+
+  const mediaDir = path.resolve(getMediaDir());
+  const source = await assertSandboxPath({
+    filePath: params.sourcePath,
+    cwd: mediaDir,
+    root: mediaDir,
+  });
+  const fileName = path.basename(source.resolved);
+  if (!fileName) {
+    return null;
+  }
+
+  const inboundDir = path.join(root, "media", "inbound");
+  await fs.mkdir(inboundDir, { recursive: true });
+  let finalName = fileName;
+  let dest = path.join(inboundDir, finalName);
+  const parsed = path.parse(fileName);
+  let suffix = 1;
+  while (true) {
+    try {
+      await fs.access(dest);
+      finalName = `${parsed.name}-${suffix}${parsed.ext}`;
+      dest = path.join(inboundDir, finalName);
+      suffix += 1;
+    } catch {
+      break;
+    }
+  }
+  await fs.copyFile(source.resolved, dest);
+
+  return {
+    absolutePath: dest,
+    displayPath: path.posix.join("media", "inbound", finalName),
+  };
+}
+
 export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
   return {
     label: "Slack",
@@ -182,9 +231,7 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
       }
 
       if (action === "download-file") {
-        const url = readStringParam(params, "url", { required: true });
-        const fileName = readStringParam(params, "fileName") ?? undefined;
-        const { token } = resolveSlackTokenAndAccountId({ cfg, accountId });
+        const fileId = readStringParam(params, "fileId", { required: true });
         const maxBytes =
           readNumberParam(params, "maxBytes", { integer: true }) ??
           (() => {
@@ -193,20 +240,24 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
             return maxMb ? maxMb * 1024 * 1024 : 10 * 1024 * 1024;
           })();
 
-        const file: SlackFile = {
-          url_private: url,
-          name: fileName,
-        };
-        const resolved = await resolveSlackMedia({
-          files: [file],
-          token,
+        const resolved = await downloadSlackFile(fileId, {
+          accountId,
           maxBytes,
         });
-        const firstResolved = resolved[0];
-        if (!firstResolved) {
+        if (!resolved) {
           throw new Error("Failed to download Slack file (or file was too large).");
         }
-        return jsonResult({ ok: true, ...firstResolved });
+        const staged = await stageDownloadedMediaIntoWorkspace({
+          sourcePath: resolved.path,
+          sandboxRoot: options?.sandboxRoot,
+          workspaceDir: options?.workspaceDir,
+        });
+        return jsonResult({
+          ok: true,
+          ...resolved,
+          path: staged?.displayPath ?? resolved.path,
+          ...(staged ? { absolutePath: staged.absolutePath } : {}),
+        });
       }
 
       if (action === "upload-file") {

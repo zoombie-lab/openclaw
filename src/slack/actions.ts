@@ -1,8 +1,10 @@
 import type { WebClient } from "@slack/web-api";
+import type { SlackFile } from "./types.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackWebClient } from "./client.js";
+import { resolveSlackMedia } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -318,6 +320,36 @@ export async function readSlackMessages(
 export async function getSlackMemberInfo(userId: string, opts: SlackActionClientOpts = {}) {
   const client = await getClient(opts);
   return await client.users.info({ user: userId });
+}
+
+export async function downloadSlackFile(
+  fileId: string,
+  opts: SlackActionClientOpts & { maxBytes: number },
+) {
+  const token = resolveToken(opts.token, opts.accountId);
+  const client = await getClient(opts);
+  const info = await client.files.info({ file: fileId });
+  const file = info.file as SlackFile | undefined;
+
+  if (!file?.url_private_download && !file?.url_private) {
+    return null;
+  }
+
+  const resolved = await resolveSlackMedia({
+    files: [
+      {
+        id: file.id,
+        name: file.name,
+        mimetype: file.mimetype,
+        url_private: file.url_private,
+        url_private_download: file.url_private_download,
+      },
+    ],
+    token,
+    maxBytes: opts.maxBytes,
+  });
+
+  return resolved[0] ?? null;
 }
 
 export async function listSlackEmojis(opts: SlackActionClientOpts = {}) {
