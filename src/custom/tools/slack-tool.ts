@@ -283,10 +283,10 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
           readStringParam(params, "filename") ??
           readStringParam(params, "fileName") ??
           "upload.bin";
-        const contentType =
+        const _contentType =
           readStringParam(params, "contentType") ?? normalized.contentType ?? undefined;
 
-        const payload = {
+        const payload: Record<string, unknown> = {
           channel_id: channelId,
           file: buffer,
           filename,
@@ -294,7 +294,7 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
           ...(threadTs ? { thread_ts: threadTs } : {}),
         };
 
-        const res = await client.files.uploadV2(payload as any);
+        const res = await client.files.uploadV2(payload);
         const parsed = res as {
           files?: Array<{ id?: string; name?: string }>;
           file?: { id?: string; name?: string };
