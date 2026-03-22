@@ -1,6 +1,11 @@
 import { Type } from "@sinclair/typebox";
 import { stringEnum } from "../../agents/schema/typebox.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "../../agents/tools/common.js";
+import {
+  type AnyAgentTool,
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "../../agents/tools/common.js";
 
 const NOTION_API_BASE = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
@@ -110,11 +115,13 @@ async function handleNotionAction(params: Record<string, unknown>): Promise<unkn
       const blockId = readStringParam(params, "block_id", { required: true });
       let path = `/blocks/${blockId}/children`;
       const queryParts: string[] = [];
-      if (params.start_cursor) {
-        queryParts.push(`start_cursor=${params.start_cursor}`);
+      const startCursor = readStringParam(params, "start_cursor");
+      if (startCursor) {
+        queryParts.push(`start_cursor=${encodeURIComponent(startCursor)}`);
       }
-      if (params.page_size) {
-        queryParts.push(`page_size=${params.page_size}`);
+      const pageSize = readNumberParam(params, "page_size", { integer: true });
+      if (pageSize !== undefined) {
+        queryParts.push(`page_size=${pageSize}`);
       }
       if (queryParts.length > 0) {
         path += `?${queryParts.join("&")}`;

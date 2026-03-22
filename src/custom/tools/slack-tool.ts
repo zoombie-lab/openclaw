@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { FilesUploadV2Arguments } from "@slack/web-api";
 import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -81,14 +82,13 @@ const SlackToolSchema = Type.Object({
     }),
   ),
   filename: Type.Optional(Type.String({ description: "Filename for upload." })),
-  contentType: Type.Optional(Type.String({ description: "Content-Type for upload." })),
   caption: Type.Optional(Type.String({ description: "Optional initial comment." })),
   uploadThreadTs: Type.Optional(
     Type.String({ description: "Optional thread_ts to upload into a thread." }),
   ),
 });
 
-function normalizeBase64Payload(raw?: string | null): { base64: string; contentType?: string } {
+function normalizeBase64Payload(raw?: string | null): { base64: string } {
   const value = (raw ?? "").trim();
   if (!value) {
     return { base64: "" };
@@ -96,7 +96,7 @@ function normalizeBase64Payload(raw?: string | null): { base64: string; contentT
   // data:<mime>;base64,<payload>
   const m = value.match(/^data:([^;]+);base64,(.+)$/i);
   if (m) {
-    return { base64: m[2] ?? "", contentType: m[1] };
+    return { base64: m[2] ?? "" };
   }
   return { base64: value };
 }
@@ -283,16 +283,16 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
           readStringParam(params, "filename") ??
           readStringParam(params, "fileName") ??
           "upload.bin";
-        const _contentType =
-          readStringParam(params, "contentType") ?? normalized.contentType ?? undefined;
-
-        const payload: Record<string, unknown> = {
+        const basePayload = {
           channel_id: channelId,
           file: buffer,
           filename,
           ...(caption ? { initial_comment: caption } : {}),
-          ...(threadTs ? { thread_ts: threadTs } : {}),
         };
+
+        const payload: FilesUploadV2Arguments = threadTs
+          ? { ...basePayload, thread_ts: threadTs }
+          : basePayload;
 
         const res = await client.files.uploadV2(payload);
         const parsed = res as {

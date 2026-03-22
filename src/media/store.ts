@@ -29,9 +29,27 @@ function sanitizeFilename(name: string): string {
   return sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
 }
 
+function formatTimestampPrefix(date = new Date()): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const hours = String(date.getUTCHours()).padStart(2, "0");
+  const minutes = String(date.getUTCMinutes()).padStart(2, "0");
+  const seconds = String(date.getUTCSeconds()).padStart(2, "0");
+  return `${year}-${month}-${day}_${hours}${minutes}${seconds}`;
+}
+
+function createShortMediaId(length = 6): string {
+  const max = 36 ** length;
+  return crypto.randomInt(max).toString(36).padStart(length, "0");
+}
+
 /**
  * Extract original filename from path if it matches the embedded format.
- * Pattern: {original}---{uuid}.{ext} → returns "{original}.{ext}"
+ * Patterns:
+ *   - {original}---{suffix}.{ext}
+ *   - {timestamp}---{original}---{suffix}.{ext}
+ * Returns "{original}.{ext}"
  * Falls back to basename if no pattern match, or "file.bin" if empty.
  */
 export function extractOriginalFilename(filePath: string): string {
@@ -43,10 +61,8 @@ export function extractOriginalFilename(filePath: string): string {
   const ext = path.extname(basename);
   const nameWithoutExt = path.basename(basename, ext);
 
-  // Check for ---{uuid} pattern (36 chars: 8-4-4-4-12 with hyphens)
-  const match = nameWithoutExt.match(
-    /^(.+)---[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
-  );
+  // Check for optional timestamp prefix plus a short alphanumeric suffix.
+  const match = nameWithoutExt.match(/^(?:\d{4}-\d{2}-\d{2}_\d{6}---)?(.+)---[a-z0-9]{6}$/i);
   if (match?.[1]) {
     return `${match[1]}${ext}`;
   }
@@ -220,20 +236,21 @@ export async function saveMediaBuffer(
   }
   const dir = path.join(resolveMediaDir(), subdir);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const uuid = crypto.randomUUID();
+  const shortId = createShortMediaId();
   const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
   const mime = await detectMime({ buffer, headerMime: contentType });
   const ext = headerExt ?? extensionForMime(mime) ?? "";
 
   let id: string;
   if (originalFilename) {
-    // Embed original name: {sanitized}---{uuid}.ext
+    // Embed a sortable UTC timestamp and the original name:
+    // {timestamp}---{sanitized}---{suffix}.ext
     const base = path.parse(originalFilename).name;
     const sanitized = sanitizeFilename(base);
-    id = sanitized ? `${sanitized}---${uuid}${ext}` : `${uuid}${ext}`;
+    const timestampPrefix = formatTimestampPrefix();
+    id = sanitized ? `${timestampPrefix}---${sanitized}---${shortId}${ext}` : `${shortId}${ext}`;
   } else {
-    // Legacy: just UUID
-    id = ext ? `${uuid}${ext}` : uuid;
+    id = ext ? `${shortId}${ext}` : shortId;
   }
 
   const dest = path.join(dir, id);

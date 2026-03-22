@@ -1,6 +1,7 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { recordActiveRunProgress } from "../logging/diagnostic.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
@@ -93,7 +94,13 @@ function sanitizeValueForLog(value: unknown, depth = 0): unknown {
     }
     return out;
   }
-  return String(value);
+  if (typeof value === "bigint" || typeof value === "symbol") {
+    return value.toString();
+  }
+  if (typeof value === "function") {
+    return value.name ? `[function ${value.name}]` : "[function]";
+  }
+  return undefined;
 }
 
 function safeJsonForLog(value: unknown): string | undefined {
@@ -264,6 +271,10 @@ export async function handleToolExecutionStart(
     stream: "tool",
     data: { phase: "start", name: toolName, toolCallId },
   });
+  recordActiveRunProgress({
+    sessionId: (ctx.params.session as { id?: string }).id,
+    kind: "tool_start",
+  });
 
   if (
     ctx.params.onToolResult &&
@@ -322,6 +333,10 @@ export function handleToolExecutionUpdate(
       name: toolName,
       toolCallId,
     },
+  });
+  recordActiveRunProgress({
+    sessionId: (ctx.params.session as { id?: string }).id,
+    kind: "tool_update",
   });
 }
 
@@ -394,6 +409,10 @@ export function handleToolExecutionEnd(
       meta,
       isError: isToolError,
     },
+  });
+  recordActiveRunProgress({
+    sessionId: (ctx.params.session as { id?: string }).id,
+    kind: "tool_result",
   });
 
   const toolStart = ctx.state.toolStartTimes.get(toolCallId);

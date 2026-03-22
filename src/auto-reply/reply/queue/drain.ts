@@ -9,11 +9,42 @@ import {
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 
+const FOLLOWUP_DRAIN_RUNNERS = new Map<string, (run: FollowupRun) => Promise<void>>();
+
+export function rememberFollowupDrainRunner(
+  key: string,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): void {
+  const cleaned = key.trim();
+  if (!cleaned) {
+    return;
+  }
+  FOLLOWUP_DRAIN_RUNNERS.set(cleaned, runFollowup);
+}
+
+export function scheduleRegisteredFollowupDrain(key: string): boolean {
+  const cleaned = key.trim();
+  if (!cleaned) {
+    return false;
+  }
+  const runFollowup = FOLLOWUP_DRAIN_RUNNERS.get(cleaned);
+  if (!runFollowup) {
+    return false;
+  }
+  scheduleFollowupDrain(cleaned, runFollowup);
+  return true;
+}
+
 export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
-  const queue = FOLLOWUP_QUEUES.get(key);
+  const cleaned = key.trim();
+  if (!cleaned) {
+    return;
+  }
+  rememberFollowupDrainRunner(cleaned, runFollowup);
+  const queue = FOLLOWUP_QUEUES.get(cleaned);
   if (!queue || queue.draining) {
     return;
   }
@@ -122,13 +153,13 @@ export function scheduleFollowupDrain(
         await runFollowup(next);
       }
     } catch (err) {
-      defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
+      defaultRuntime.error?.(`followup queue drain failed for ${cleaned}: ${String(err)}`);
     } finally {
       queue.draining = false;
       if (queue.items.length === 0 && queue.droppedCount === 0) {
-        FOLLOWUP_QUEUES.delete(key);
+        FOLLOWUP_QUEUES.delete(cleaned);
       } else {
-        scheduleFollowupDrain(key, runFollowup);
+        scheduleFollowupDrain(cleaned, runFollowup);
       }
     }
   })();

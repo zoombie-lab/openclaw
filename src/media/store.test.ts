@@ -167,38 +167,46 @@ describe("media store", () => {
   describe("extractOriginalFilename", () => {
     it("extracts original filename from embedded pattern", async () => {
       await withTempStore(async (store) => {
-        // Pattern: {original}---{uuid}.{ext}
-        const filename = "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf";
+        // Pattern: {original}---{suffix}.{ext}
+        const filename = "report---a1b2c3.pdf";
         const result = store.extractOriginalFilename(`/path/to/${filename}`);
         expect(result).toBe("report.pdf");
       });
     });
 
-    it("handles uppercase UUID pattern", async () => {
+    it("handles uppercase alphanumeric suffix", async () => {
       await withTempStore(async (store) => {
-        const filename = "Document---A1B2C3D4-E5F6-7890-ABCD-EF1234567890.docx";
+        const filename = "Document---A1B2C3.docx";
         const result = store.extractOriginalFilename(`/media/inbound/${filename}`);
         expect(result).toBe("Document.docx");
       });
     });
 
+    it("extracts original filename from timestamped embedded pattern", async () => {
+      await withTempStore(async (store) => {
+        const filename = "2026-03-20_041544---report---a1b2c3.pdf";
+        const result = store.extractOriginalFilename(`/media/inbound/${filename}`);
+        expect(result).toBe("report.pdf");
+      });
+    });
+
     it("falls back to basename for non-matching patterns", async () => {
       await withTempStore(async (store) => {
-        // UUID-only filename (legacy format)
-        const uuidOnly = "a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf";
-        expect(store.extractOriginalFilename(`/path/${uuidOnly}`)).toBe(uuidOnly);
+        // Suffix-only filename without original-name embedding
+        const shortOnly = "a1b2c3.pdf";
+        expect(store.extractOriginalFilename(`/path/${shortOnly}`)).toBe(shortOnly);
 
         // Regular filename without embedded pattern
         expect(store.extractOriginalFilename("/path/to/regular.txt")).toBe("regular.txt");
 
-        // Filename with --- but invalid UUID part
+        // Filename with --- but invalid short suffix
         expect(store.extractOriginalFilename("/path/to/foo---bar.txt")).toBe("foo---bar.txt");
       });
     });
 
     it("preserves original name with special characters", async () => {
       await withTempStore(async (store) => {
-        const filename = "报告_2024---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf";
+        const filename = "报告_2024---a1b2c3.pdf";
         const result = store.extractOriginalFilename(`/media/${filename}`);
         expect(result).toBe("报告_2024.pdf");
       });
@@ -206,7 +214,7 @@ describe("media store", () => {
   });
 
   describe("saveMediaBuffer with originalFilename", () => {
-    it("embeds original filename in stored path when provided", async () => {
+    it("embeds timestamped original filename with a short suffix when provided", async () => {
       await withTempStore(async (store) => {
         const buf = Buffer.from("test content");
         const saved = await store.saveMediaBuffer(
@@ -217,9 +225,9 @@ describe("media store", () => {
           "report.txt",
         );
 
-        // Should contain the original name and a UUID pattern
-        expect(saved.id).toMatch(/^report---[a-f0-9-]{36}\.txt$/);
-        expect(saved.path).toContain("report---");
+        // Should contain the timestamp, original name, and short suffix
+        expect(saved.id).toMatch(/^20\d{2}-\d{2}-\d{2}_\d{6}---report---[a-z0-9]{6}\.txt$/);
+        expect(saved.path).toContain("---report---");
 
         // Should be able to extract original name
         const extracted = store.extractOriginalFilename(saved.path);
@@ -240,7 +248,7 @@ describe("media store", () => {
         );
 
         // Unsafe chars should be replaced with underscores
-        expect(saved.id).toMatch(/^my_file_test---[a-f0-9-]{36}\.txt$/);
+        expect(saved.id).toMatch(/^20\d{2}-\d{2}-\d{2}_\d{6}---my_file_test---[a-z0-9]{6}\.txt$/);
       });
     });
 
@@ -257,7 +265,7 @@ describe("media store", () => {
         );
 
         // Original name should be truncated to 60 chars
-        const baseName = path.parse(saved.id).name.split("---")[0];
+        const [, baseName] = path.parse(saved.id).name.split("---");
         expect(baseName.length).toBeLessThanOrEqual(60);
       });
     });
@@ -267,8 +275,7 @@ describe("media store", () => {
         const buf = Buffer.from("test");
         const saved = await store.saveMediaBuffer(buf, "text/plain", "inbound");
 
-        // Should be UUID-only pattern (legacy behavior)
-        expect(saved.id).toMatch(/^[a-f0-9-]{36}\.txt$/);
+        expect(saved.id).toMatch(/^[a-z0-9]{6}\.txt$/);
         expect(saved.id).not.toContain("---");
       });
     });

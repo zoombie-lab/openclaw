@@ -70,7 +70,8 @@ const ImageGenerateToolSchema = Type.Object({
   ),
   model: Type.Optional(
     Type.String({
-      description: "Optional provider/model override, e.g. google/gemini-3-pro-image-preview.",
+      description:
+        "Optional provider/model override, e.g. google/gemini-3-pro-image-preview. Use a direct Google model when you need explicit size, aspectRatio, or resolution control for image edits.",
     }),
   ),
   filename: Type.Optional(
@@ -82,19 +83,19 @@ const ImageGenerateToolSchema = Type.Object({
   size: Type.Optional(
     Type.String({
       description:
-        "Optional size hint like 1024x1024, 1536x1024, 1024x1536, 1024x1792, or 1792x1024.",
+        "Optional size hint like 1024x1024, 1536x1024, 1024x1536, 1024x1792, or 1792x1024. Do not pass size for vercel-ai-gateway edit mode; that path uses provider defaults.",
     }),
   ),
   aspectRatio: Type.Optional(
     Type.String({
       description:
-        "Optional aspect ratio hint: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9.",
+        "Optional aspect ratio hint: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9. Do not pass aspectRatio for vercel-ai-gateway edit mode; that path uses provider defaults.",
     }),
   ),
   resolution: Type.Optional(
     Type.String({
       description:
-        "Optional resolution hint: 1K, 2K, or 4K. Useful for Google edit/generation flows.",
+        "Optional resolution hint: 1K, 2K, or 4K. Useful for Google edit/generation flows. Do not pass resolution for vercel-ai-gateway edit mode; that path uses provider defaults.",
     }),
   ),
   count: Type.Optional(
@@ -696,7 +697,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Generate new images or edit reference images with the configured or inferred image-generation model. Use action="list" to inspect available providers/models. Generated images are delivered automatically from the tool result as MEDIA paths.',
+      'Generate new images or edit reference images with the configured or inferred image-generation model. Use action="list" to inspect available providers/models. Generated images are delivered automatically from the tool result as MEDIA paths. Provider note: for vercel-ai-gateway reference-image edits, do not pass size, aspectRatio, or resolution; use provider defaults. If explicit output geometry is required for edits, prefer a direct Google model override instead of vercel-ai-gateway.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -759,18 +760,24 @@ export function createImageGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
-      const resolution =
-        explicitResolution ??
-        (size
-          ? undefined
-          : inputImages.length > 0
-            ? await inferResolutionFromInputImages(inputImages)
-            : undefined);
       const selectedProvider = resolveSelectedImageGenerationProvider({
         config: effectiveCfg,
         imageGenerationModelConfig,
         modelOverride: model,
       });
+      const isEdit = inputImages.length > 0;
+      const modeCaps = selectedProvider
+        ? isEdit
+          ? selectedProvider.capabilities.edit
+          : selectedProvider.capabilities.generate
+        : undefined;
+      const resolution =
+        explicitResolution ??
+        (size || !modeCaps?.supportsResolution
+          ? undefined
+          : inputImages.length > 0
+            ? await inferResolutionFromInputImages(inputImages)
+            : undefined);
       validateImageGenerationCapabilities({
         provider: selectedProvider,
         count,

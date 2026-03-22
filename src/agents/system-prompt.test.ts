@@ -115,10 +115,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
-  it("includes the canonical file workflow when save_file is available", () => {
+  it("includes the canonical file workflow when files is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      toolNames: ["message", "save_file", "image_generate"],
+      toolNames: ["message", "files", "image_generate"],
     });
 
     expect(prompt).toContain("### file workflow");

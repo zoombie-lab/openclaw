@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -40,6 +41,73 @@ function buildDisplayPath(params: { filePath: string; root: string }): string {
   return normalized.startsWith(".") ? normalized : `./${normalized}`;
 }
 
+type FileMatch = {
+  path: string;
+  displayPath: string;
+  bytes: number;
+  modifiedAt: string;
+};
+
+async function collectFileMatches(params: {
+  root: string;
+  startDir: string;
+  query: string;
+  limit: number;
+}): Promise<FileMatch[]> {
+  const loweredQuery = params.query.trim().toLowerCase();
+  const pending = [params.startDir];
+  const matches: FileMatch[] = [];
+
+  while (pending.length > 0) {
+    const current = pending.shift();
+    if (!current) {
+      continue;
+    }
+
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const absolutePath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(absolutePath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const displayPath = buildDisplayPath({ filePath: absolutePath, root: params.root });
+      const haystack = `${entry.name}\n${displayPath}`.toLowerCase();
+      if (!haystack.includes(loweredQuery)) {
+        continue;
+      }
+
+      const stat = await fs.stat(absolutePath);
+      matches.push({
+        path: absolutePath,
+        displayPath,
+        bytes: stat.size,
+        modifiedAt: stat.mtime.toISOString(),
+      });
+    }
+  }
+
+  matches.sort((a, b) => {
+    const modifiedCompare = b.modifiedAt.localeCompare(a.modifiedAt);
+    if (modifiedCompare !== 0) {
+      return modifiedCompare;
+    }
+    return a.displayPath.localeCompare(b.displayPath);
+  });
+
+  return matches.slice(0, params.limit);
+}
+
 export function createSaveFileTool(options?: {
   config?: OpenClawConfig;
   sandboxRoot?: string;
@@ -48,14 +116,39 @@ export function createSaveFileTool(options?: {
   const root = (options?.sandboxRoot ?? options?.workspaceDir ?? process.cwd()).trim();
 
   return {
-    label: "Save File",
-    name: "save_file",
+    label: "Files",
+    name: "files",
     description:
-      "Canonical workspace file tool. Use it to create CSV/JSON/text files, decode base64/data URLs, copy local files, download URLs into the workspace, and stage files for message/image_generate. Use attach=true to include a MEDIA line for the saved file.",
+      "Canonical workspace file tool. Use it to create CSV/JSON/text files, decode base64/data URLs, copy local files, download URLs into the workspace, find previously saved local files, and stage files for message/image_generate. Use attach=true to include a MEDIA line for a single saved or found file.",
     parameters: Type.Object({
-      path: Type.String({
-        description: "Output path inside the workspace or sandbox (relative paths recommended).",
-      }),
+      action: Type.Optional(
+        Type.String({
+          description: 'Action to perform: "save" (default) or "find".',
+        }),
+      ),
+      path: Type.Optional(
+        Type.String({
+          description:
+            'For action="save": output path inside the workspace or sandbox (relative paths recommended).',
+        }),
+      ),
+      query: Type.Optional(
+        Type.String({
+          description:
+            'For action="find": case-insensitive substring to match against filenames or relative paths.',
+        }),
+      ),
+      directory: Type.Optional(
+        Type.String({
+          description:
+            'For action="find": optional directory inside the workspace to search from. Defaults to the workspace root.',
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Number({
+          description: 'For action="find": maximum number of matches to return. Defaults to 20.',
+        }),
+      ),
       text: Type.Optional(Type.String()),
       buffer: Type.Optional(
         Type.String({
@@ -79,8 +172,69 @@ export function createSaveFileTool(options?: {
     }),
     execute: async (_toolCallId, args) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+      const action =
+        typeof record.action === "string" && record.action.trim()
+          ? record.action.trim().toLowerCase()
+          : "save";
       const requestedPath =
         typeof record.path === "string" && record.path.trim() ? record.path.trim() : "";
+      const attach = record.attach === true;
+
+      if (action === "find") {
+        const query = typeof record.query === "string" ? record.query.trim() : "";
+        if (!query) {
+          throw new Error('query required for action="find"');
+        }
+        const requestedDirectory =
+          typeof record.directory === "string" && record.directory.trim()
+            ? record.directory.trim()
+            : ".";
+        const resolvedDirectory = await assertSandboxPath({
+          filePath: requestedDirectory,
+          cwd: root,
+          root,
+        });
+        const rawLimit =
+          typeof record.limit === "number" && Number.isFinite(record.limit) ? record.limit : 20;
+        const limit = Math.max(1, Math.min(100, Math.floor(rawLimit)));
+        const matches = await collectFileMatches({
+          root,
+          startDir: resolvedDirectory.resolved,
+          query,
+          limit,
+        });
+        const lines = [
+          matches.length > 0
+            ? `Found ${matches.length} file${matches.length === 1 ? "" : "s"} for "${query}":`
+            : `No files found for "${query}".`,
+        ];
+        if (matches.length > 0) {
+          for (const match of matches) {
+            lines.push(`- ${match.displayPath} (${match.bytes} bytes, ${match.modifiedAt})`);
+          }
+          lines.push(
+            "Reuse one of these local paths with message(filePath/path/media) or image_generate(image/images).",
+          );
+          if (attach && matches.length === 1) {
+            lines.push(`MEDIA:${matches[0]?.displayPath}`);
+          }
+        }
+
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: {
+            action: "find",
+            query,
+            directory: buildDisplayPath({ filePath: resolvedDirectory.resolved, root }),
+            count: matches.length,
+            matches,
+          },
+        };
+      }
+
+      if (action !== "save") {
+        throw new Error(`Unsupported action: ${action}`);
+      }
       if (!requestedPath) {
         throw new Error("path required");
       }
@@ -109,7 +263,6 @@ export function createSaveFileTool(options?: {
           : typeof record.mimeType === "string" && record.mimeType.trim()
             ? record.mimeType.trim()
             : undefined;
-      const attach = record.attach === true;
 
       let bytes = 0;
       let contentType = contentTypeRaw;

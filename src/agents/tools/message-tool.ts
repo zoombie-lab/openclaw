@@ -354,7 +354,7 @@ function buildMessageToolDescription(options?: {
   currentChannelId?: string;
 }): string {
   const baseDescription =
-    "Send, delete, and manage messages via channel plugins. Use save_file to create/download/stage files first, then deliver the saved path here via media/path/filePath.";
+    "Send, delete, and manage messages via channel plugins. Use files to create/download/stage files first, then deliver the saved path here via media/path/filePath.";
 
   // If we have a current channel, show only its supported actions
   if (options?.currentChannel) {

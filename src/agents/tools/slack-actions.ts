@@ -312,9 +312,10 @@ export async function handleSlackAction(
           } catch (fallbackErr) {
             const fallbackError =
               fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+            // oxlint-disable-next-line preserve-caught-error
             throw new Error(
               `Slack createChannel failed (${createError}) and fallback DM failed (${fallbackError})`,
-              { cause: err },
+              { cause: fallbackErr },
             );
           }
         }

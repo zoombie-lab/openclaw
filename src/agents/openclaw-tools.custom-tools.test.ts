@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
@@ -15,7 +14,9 @@ describe("openclaw-tools: custom tools", () => {
     expect(shopifyOps).toBeDefined();
 
     for (const tool of [slack, shopifyOps]) {
-      if (!tool) continue;
+      if (!tool) {
+        continue;
+      }
       const schema = tool.parameters as {
         type?: unknown;
         anyOf?: unknown;
@@ -29,4 +30,3 @@ describe("openclaw-tools: custom tools", () => {
     }
   });
 });
-

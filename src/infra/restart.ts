@@ -58,6 +58,10 @@ export function consumeGatewaySigusr1RestartAuthorization(): boolean {
   return true;
 }
 
+export function markGatewaySigusr1RestartHandled(): void {
+  resetSigusr1AuthorizationIfExpired();
+}
+
 function formatSpawnDetail(result: {
   error?: unknown;
   status?: number | null;

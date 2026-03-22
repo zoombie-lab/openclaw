@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemorySearchOptions,
@@ -49,7 +48,6 @@ import {
   isMemoryPath,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
-  type MemoryChunk,
   type MemoryFileEntry,
   runWithConcurrency,
 } from "./internal.js";
@@ -1681,7 +1679,7 @@ export class MemoryIndexManager implements MemorySearchManager {
         if (!value || typeof value !== "object") {
           continue;
         }
-        const entry = value as SessionEntry;
+        const entry = value;
         if (!addJsonlCandidate(entry.sessionFile)) {
           break;
         }

@@ -21,7 +21,7 @@ afterEach(async () => {
   }
 });
 
-describe("save_file tool", () => {
+describe("files tool", () => {
   it("writes text into a sandboxed relative path and emits MEDIA when attach=true", async () => {
     const sandboxRoot = await makeSandbox();
     const tool = createSaveFileTool({ sandboxRoot });
@@ -80,6 +80,66 @@ describe("save_file tool", () => {
     expect(result.details).toMatchObject({
       displayPath: "./artifacts/report.csv",
       source: "url",
+    });
+  });
+
+  it("finds previously saved local files for later reuse", async () => {
+    const sandboxRoot = await makeSandbox();
+    await fs.mkdir(path.join(sandboxRoot, "media"), { recursive: true });
+    const olderPath = path.join(sandboxRoot, "media", "product-photo-studio.jpg");
+    const newerPath = path.join(sandboxRoot, "media", "product-photo-lifestyle.jpg");
+    await fs.writeFile(olderPath, "older");
+    await fs.writeFile(newerPath, "newer");
+    await fs.utimes(
+      olderPath,
+      new Date("2026-03-20T22:09:46.000Z"),
+      new Date("2026-03-20T22:09:46.000Z"),
+    );
+    await fs.utimes(
+      newerPath,
+      new Date("2026-03-20T22:10:13.000Z"),
+      new Date("2026-03-20T22:10:13.000Z"),
+    );
+    const tool = createSaveFileTool({ sandboxRoot });
+
+    const result = await tool.execute("call-find", {
+      action: "find",
+      query: "product-photo",
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+    });
+    expect(result.content?.[0]?.text).toContain("./media/product-photo-lifestyle.jpg");
+    expect(result.content?.[0]?.text).toContain("./media/product-photo-studio.jpg");
+    expect(result.details).toMatchObject({
+      action: "find",
+      query: "product-photo",
+      count: 2,
+    });
+    expect(
+      (result.details as { matches: Array<{ displayPath: string }> }).matches.map(
+        (match) => match.displayPath,
+      ),
+    ).toEqual(["./media/product-photo-lifestyle.jpg", "./media/product-photo-studio.jpg"]);
+  });
+
+  it("emits MEDIA for a single found file when attach=true", async () => {
+    const sandboxRoot = await makeSandbox();
+    await fs.mkdir(path.join(sandboxRoot, "media"), { recursive: true });
+    await fs.writeFile(path.join(sandboxRoot, "media", "hero.jpg"), "hero");
+    const tool = createSaveFileTool({ sandboxRoot });
+
+    const result = await tool.execute("call-find-attach", {
+      action: "find",
+      query: "hero.jpg",
+      attach: true,
+    });
+
+    expect(result.content?.[0]?.text).toContain("MEDIA:./media/hero.jpg");
+    expect(result.details).toMatchObject({
+      action: "find",
+      count: 1,
     });
   });
 

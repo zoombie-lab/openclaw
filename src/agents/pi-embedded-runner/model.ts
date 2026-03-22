@@ -134,7 +134,7 @@ function resolveForwardCompatGatewayModel(
   }
 
   const normalizedProvider = normalizeProviderId(provider);
-  const templates = modelRegistry.getAll() as Model<Api>[];
+  const templates = modelRegistry.getAll();
   const template = templates.find(
     (entry) => normalizeProviderId(String(entry?.provider ?? "")) === normalizedProvider,
   );

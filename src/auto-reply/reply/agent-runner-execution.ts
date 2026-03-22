@@ -26,6 +26,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { recordActiveRunProgress } from "../../logging/diagnostic.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -424,6 +425,11 @@ export async function runAgentTurnWithFallback(params: {
                     // Track sent key to avoid duplicate in final payloads.
                     directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
                     await params.opts?.onBlockReply?.(blockPayload);
+                    recordActiveRunProgress({
+                      sessionId: params.followupRun.run.sessionId,
+                      sessionKey: params.followupRun.run.sessionKey,
+                      kind: "block_delivery",
+                    });
                   }
                   // When streaming is disabled entirely, blocks are accumulated in final text instead.
                 }
@@ -450,6 +456,11 @@ export async function runAgentTurnWithFallback(params: {
                     await onToolResult({
                       text,
                       mediaUrls: payload.mediaUrls,
+                    });
+                    recordActiveRunProgress({
+                      sessionId: params.followupRun.run.sessionId,
+                      sessionKey: params.followupRun.run.sessionKey,
+                      kind: "tool_delivery",
                     });
                   })()
                     .catch((err) => {

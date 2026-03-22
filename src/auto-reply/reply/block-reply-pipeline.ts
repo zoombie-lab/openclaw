@@ -74,11 +74,12 @@ export function createBlockReplyPipeline(params: {
     payload: ReplyPayload,
     options?: { abortSignal?: AbortSignal; timeoutMs?: number },
   ) => Promise<void> | void;
+  onDelivered?: (payload: ReplyPayload) => void;
   timeoutMs: number;
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
 }): BlockReplyPipeline {
-  const { onBlockReply, timeoutMs, coalescing, buffer } = params;
+  const { onBlockReply, onDelivered, timeoutMs, coalescing, buffer } = params;
   const sentKeys = new Set<string>();
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
@@ -129,6 +130,7 @@ export function createBlockReplyPipeline(params: {
         }
         sentKeys.add(payloadKey);
         didStream = true;
+        onDelivered?.(payload);
       })
       .catch((err) => {
         if (err === timeoutError) {

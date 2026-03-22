@@ -29,11 +29,10 @@ export function loadSessionsSendA2ARegistryFromDisk(): Map<string, SessionsSendA
     if (!entry || typeof entry !== "object") {
       continue;
     }
-    const typed = entry as SessionsSendA2ARunRecord;
-    if (!typed.runId || typeof typed.runId !== "string") {
+    if (!entry.runId || typeof entry.runId !== "string") {
       continue;
     }
-    out.set(runId, typed);
+    out.set(runId, entry);
   }
   return out;
 }

@@ -19,6 +19,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { recordActiveRunProgress } from "../../logging/diagnostic.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
@@ -36,7 +37,12 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.j
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
-import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  rememberFollowupDrainRunner,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -153,6 +159,13 @@ export async function runReplyAgent(params: {
     blockStreamingEnabled && opts?.onBlockReply
       ? createBlockReplyPipeline({
           onBlockReply: opts.onBlockReply,
+          onDelivered: () => {
+            recordActiveRunProgress({
+              sessionId: followupRun.run.sessionId,
+              sessionKey: followupRun.run.sessionKey,
+              kind: "block_delivery",
+            });
+          },
           timeoutMs: blockReplyTimeoutMs,
           coalescing: blockReplyCoalescing,
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
@@ -225,6 +238,7 @@ export async function runReplyAgent(params: {
     defaultModel,
     agentCfgContextTokens,
   });
+  rememberFollowupDrainRunner(queueKey, runFollowupTurn);
 
   let responseUsageLine: string | undefined;
   type SessionResetOptions = {

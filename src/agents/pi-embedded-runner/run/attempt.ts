@@ -51,7 +51,10 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { acquireSessionWriteLock } from "../../session-write-lock.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionLockMaxHoldFromTimeout,
+} from "../../session-write-lock.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverrides,
@@ -622,6 +625,7 @@ export async function runEmbeddedAttempt(
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({ timeoutMs: params.timeoutMs }),
     });
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
@@ -889,7 +893,11 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         abort: abortRun,
       };
-      setActiveEmbeddedRun(params.sessionId, queueHandle);
+      setActiveEmbeddedRun({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        handle: queueHandle,
+      });
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;

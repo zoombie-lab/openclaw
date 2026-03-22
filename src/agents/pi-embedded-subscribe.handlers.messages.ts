@@ -2,6 +2,7 @@ import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { recordActiveRunProgress } from "../logging/diagnostic.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -229,6 +230,10 @@ export function handleMessageUpdate(
           delta: deltaText,
           mediaUrls: hasMedia ? mediaUrls : undefined,
         },
+      });
+      recordActiveRunProgress({
+        sessionId: (ctx.params.session as { id?: string }).id,
+        kind: "assistant_delta",
       });
       ctx.state.emittedAssistantUpdate = true;
       if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {

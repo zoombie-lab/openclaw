@@ -123,8 +123,8 @@ function buildMessagingSection(params: {
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
           "- For `action=send`, include `to` and `message`.",
-          params.availableTools.has("save_file")
-            ? "- Do not use `message` to create, download, or stage files. Use `save_file` first, then send the saved path with `media`, `path`, or `filePath`."
+          params.availableTools.has("files")
+            ? "- Do not use `message` to create, download, or stage files. Use `files` first, then send the saved path with `media`, `path`, or `filePath`."
             : "",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
@@ -138,14 +138,14 @@ function buildMessagingSection(params: {
           .filter(Boolean)
           .join("\n")
       : "",
-    params.availableTools.has("save_file")
+    params.availableTools.has("files")
       ? [
           "",
           "### file workflow",
-          "- Use `save_file` as the canonical file tool for CSV/JSON/text exports, copying local files, downloading URLs into the workspace, and staging files for other tools.",
+          "- Use `files` as the canonical file tool for CSV/JSON/text exports, copying local files, downloading URLs into the workspace, finding previously saved local files, and staging files for other tools.",
           params.availableTools.has("image_generate")
-            ? "- Before `image_generate`, make sure any reference image exists as a local workspace path. If needed, stage or copy it with `save_file` first."
-            : "- Reuse the saved local path for later tool calls when you need the same file again.",
+            ? "- Before `image_generate`, make sure any reference image exists as a local workspace path. If needed, stage or copy it with `files` first. For later turns, use `files` to find the local file again instead of reusing provider-private URLs."
+            : "- Reuse the saved local path for later tool calls when you need the same file again. If you do not remember the path, use `files` to find it locally.",
           params.availableTools.has("message")
             ? "- To send a saved file out, pass the returned local path to `message` using `media`, `path`, or `filePath`."
             : "",
@@ -257,13 +257,13 @@ export function buildAgentSystemPrompt(params: {
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
-    save_file:
-      "Canonical workspace file tool for CSV/JSON/text exports, base64/data URLs, local file copies, and URL downloads. Reuse the saved local path with message or image_generate.",
+    files:
+      "Canonical workspace file tool for saving and finding local files, CSV/JSON/text exports, base64/data URLs, local file copies, and URL downloads. Reuse the saved local path with message or image_generate.",
     image_generate:
-      "Generate or edit images with AI. Reference images can be local paths, file:// URLs, data URLs, or http(s) URLs when unsandboxed. Stage local copies with save_file when needed.",
+      "Generate or edit images with AI. Reference images can be local paths, file:// URLs, data URLs, or http(s) URLs when unsandboxed. Stage local copies with files when needed.",
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message:
-      "Send messages and channel actions. Use save_file first for file creation/download/staging, then send the saved path here.",
+      "Send messages and channel actions. Use files first for file creation/download/staging, then send the saved path here.",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: "List agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
@@ -290,7 +290,7 @@ export function buildAgentSystemPrompt(params: {
     "browser",
     "canvas",
     "nodes",
-    "save_file",
+    "files",
     "image_generate",
     "cron",
     "message",

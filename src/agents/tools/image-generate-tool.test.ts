@@ -314,6 +314,95 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("does not infer resolution for edit providers that do not support resolution overrides", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "vercel-ai-gateway",
+        defaultModel: "google/gemini-3.1-flash-image-preview",
+        models: ["google/gemini-3.1-flash-image-preview"],
+        capabilities: {
+          generate: {
+            maxCount: 1,
+            supportsSize: false,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          edit: {
+            enabled: true,
+            maxCount: 1,
+            maxInputImages: 5,
+            supportsSize: false,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "vercel-ai-gateway",
+      model: "google/gemini-3.1-flash-image-preview",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "edited.png",
+        },
+      ],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/png",
+    });
+    const getImageMetadata = vi.spyOn(imageOps, "getImageMetadata");
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "vercel-ai-gateway/google/gemini-3.1-flash-image-preview",
+            },
+          },
+        },
+      },
+      workspaceDir: process.cwd(),
+    });
+
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    await tool.execute("call-edit-no-resolution", {
+      prompt: "Keep the product the same, just clean up the background.",
+      image: "./fixtures/reference.png",
+    });
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolution: undefined,
+        inputImages: [
+          expect.objectContaining({
+            buffer: Buffer.from("input-image"),
+            mimeType: "image/png",
+          }),
+        ],
+      }),
+    );
+    expect(getImageMetadata).not.toHaveBeenCalled();
+  });
+
   it("forwards explicit aspect ratio and supports up to 5 reference images", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "google",

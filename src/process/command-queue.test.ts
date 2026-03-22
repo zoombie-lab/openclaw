@@ -16,10 +16,61 @@ vi.mock("../logging/diagnostic.js", () => ({
   diagnosticLogger: diagnosticMocks.diag,
 }));
 
-import { enqueueCommand, getQueueSize } from "./command-queue.js";
+type CommandQueueModule = typeof import("./command-queue.js");
+
+let clearCommandLane: CommandQueueModule["clearCommandLane"];
+let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
+let enqueueCommand: CommandQueueModule["enqueueCommand"];
+let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
+let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
+let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
+let getQueueSize: CommandQueueModule["getQueueSize"];
+let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
+let recoverCommandLane: CommandQueueModule["recoverCommandLane"];
+let resetAllLanes: CommandQueueModule["resetAllLanes"];
+let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
+let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+function enqueueBlockedMainTask<T = void>(
+  onRelease?: () => Promise<T> | T,
+): {
+  task: Promise<T>;
+  release: () => void;
+} {
+  const deferred = createDeferred();
+  const task = enqueueCommand(async () => {
+    await deferred.promise;
+    return (await onRelease?.()) as T;
+  });
+  return { task, release: deferred.resolve };
+}
 
 describe("command queue", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      clearCommandLane,
+      CommandLaneClearedError,
+      enqueueCommand,
+      enqueueCommandInLane,
+      GatewayDrainingError,
+      getActiveTaskCount,
+      getQueueSize,
+      markGatewayDraining,
+      recoverCommandLane,
+      resetAllLanes,
+      setCommandLaneConcurrency,
+      waitForActiveTasks,
+    } = await import("./command-queue.js"));
+    resetAllLanes();
     diagnosticMocks.logLaneEnqueue.mockClear();
     diagnosticMocks.logLaneDequeue.mockClear();
     diagnosticMocks.diag.debug.mockClear();
@@ -36,7 +87,7 @@ describe("command queue", () => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       calls.push(id);
-      await new Promise((resolve) => setTimeout(resolve, 15));
+      await Promise.resolve();
       active -= 1;
       return id;
     };
@@ -66,23 +117,202 @@ describe("command queue", () => {
     let waited: number | null = null;
     let queuedAhead: number | null = null;
 
-    // First task holds the queue long enough to trigger wait notice.
-    const first = enqueueCommand(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
+    vi.useFakeTimers();
+    try {
+      let releaseFirst!: () => void;
+      const blocker = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const first = enqueueCommand(async () => {
+        await blocker;
+      });
+
+      const second = enqueueCommand(async () => {}, {
+        warnAfterMs: 5,
+        onWait: (ms, ahead) => {
+          waited = ms;
+          queuedAhead = ahead;
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(6);
+      releaseFirst();
+      await Promise.all([first, second]);
+
+      expect(waited).not.toBeNull();
+      expect(waited as number).toBeGreaterThanOrEqual(5);
+      expect(queuedAhead).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("getActiveTaskCount returns count of currently executing tasks", async () => {
+    const { task, release } = enqueueBlockedMainTask();
+
+    expect(getActiveTaskCount()).toBe(1);
+
+    release();
+    await task;
+    expect(getActiveTaskCount()).toBe(0);
+  });
+
+  it("waitForActiveTasks resolves immediately when no tasks are active", async () => {
+    const { drained } = await waitForActiveTasks(1000);
+    expect(drained).toBe(true);
+  });
+
+  it("waitForActiveTasks waits for active tasks to finish", async () => {
+    const { task, release } = enqueueBlockedMainTask();
+
+    vi.useFakeTimers();
+    try {
+      const drainPromise = waitForActiveTasks(5000);
+
+      await vi.advanceTimersByTimeAsync(50);
+      release();
+      await vi.advanceTimersByTimeAsync(50);
+
+      const { drained } = await drainPromise;
+      expect(drained).toBe(true);
+
+      await task;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waitForActiveTasks returns drained=false on timeout", async () => {
+    const { task, release } = enqueueBlockedMainTask();
+
+    vi.useFakeTimers();
+    try {
+      const waitPromise = waitForActiveTasks(50);
+      await vi.advanceTimersByTimeAsync(100);
+      const { drained } = await waitPromise;
+      expect(drained).toBe(false);
+
+      release();
+      await task;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waitForActiveTasks waits for queued work that starts after drain begins", async () => {
+    const first = createDeferred();
+    const second = createDeferred();
+
+    const task1 = enqueueCommand(async () => {
+      await first.promise;
+    });
+    const task2 = enqueueCommand(async () => {
+      await second.promise;
     });
 
-    const second = enqueueCommand(async () => {}, {
-      warnAfterMs: 5,
-      onWait: (ms, ahead) => {
-        waited = ms;
-        queuedAhead = ahead;
-      },
+    vi.useFakeTimers();
+    try {
+      const drainPromise = waitForActiveTasks(5000);
+
+      await vi.advanceTimersByTimeAsync(50);
+      first.resolve();
+      await vi.advanceTimersByTimeAsync(50);
+
+      let drained = false;
+      void drainPromise.then((result) => {
+        drained = result.drained;
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(drained).toBe(false);
+
+      second.resolve();
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(drainPromise).resolves.toEqual({ drained: true });
+      await Promise.all([task1, task2]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers a stale active lane and lets queued work continue", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const first = enqueueCommand(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        }),
+    );
+    const second = enqueueCommand(async () => "second");
+
+    await Promise.resolve();
+    expect(getQueueSize()).toBe(2);
+
+    const recovered = recoverCommandLane();
+    expect(recovered.activeRecovered).toBe(1);
+
+    await expect(second).resolves.toBe("second");
+    expect(getQueueSize()).toBe(0);
+
+    releaseFirst?.();
+    await expect(first).resolves.toBeUndefined();
+  });
+
+  it("resetAllLanes drains queued work immediately after reset", async () => {
+    const lane = `reset-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    let resolve1!: () => void;
+    const blocker = new Promise<void>((r) => {
+      resolve1 = r;
     });
 
-    await Promise.all([first, second]);
+    const task1 = enqueueCommandInLane(lane, async () => {
+      await blocker;
+    });
 
-    expect(waited).not.toBeNull();
-    expect(waited as number).toBeGreaterThanOrEqual(5);
-    expect(queuedAhead).toBe(0);
+    await vi.waitFor(() => {
+      expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
+    });
+
+    let task2Ran = false;
+    const task2 = enqueueCommandInLane(lane, async () => {
+      task2Ran = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
+    });
+    expect(task2Ran).toBe(false);
+
+    resetAllLanes();
+
+    resolve1();
+    await task1;
+    await task2;
+    expect(task2Ran).toBe(true);
+  });
+
+  it("rejects queued tasks when a lane is cleared", async () => {
+    const { task: first, release } = enqueueBlockedMainTask();
+    const second = enqueueCommand(async () => "second");
+
+    await vi.waitFor(() => {
+      expect(getQueueSize()).toBe(2);
+    });
+    expect(clearCommandLane()).toBe(1);
+
+    await expect(second).rejects.toBeInstanceOf(CommandLaneClearedError);
+
+    release();
+    await first;
+  });
+
+  it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {
+    markGatewayDraining();
+    await expect(enqueueCommand(async () => "blocked")).rejects.toBeInstanceOf(
+      GatewayDrainingError,
+    );
   });
 });

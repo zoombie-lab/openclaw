@@ -161,6 +161,7 @@ export async function resolveSlackMedia(params: {
         fetched.contentType ?? file.mimetype,
         "inbound",
         params.maxBytes,
+        fetched.fileName ?? file.name,
       );
       const label = fetched.fileName ?? file.name;
       resolved.push({
