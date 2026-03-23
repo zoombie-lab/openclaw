@@ -7,7 +7,7 @@ import {
   readStringParam,
 } from "../../agents/tools/common.js";
 
-const GRAPH_API_BASE = "https://graph.facebook.com/v22.0";
+const GRAPH_API_BASE = "https://graph.facebook.com/v25.0";
 
 const META_ADS_ACTIONS = [
   // Read
@@ -197,8 +197,7 @@ async function handleMetaAdsAction(params: Record<string, unknown>): Promise<unk
       const limit = readNumberParam(params, "limit", { integer: true });
       const after = readStringParam(params, "after");
       const qp: Record<string, string> = {
-        fields:
-          "id,name,status,creative{id,title,body,image_url,thumbnail_url,call_to_action_type},adset_id,campaign_id",
+        fields: "id,name,status,creative,adset_id,campaign_id",
       };
       if (limit) {
         qp.limit = String(limit);
@@ -206,7 +205,59 @@ async function handleMetaAdsAction(params: Record<string, unknown>): Promise<unk
       if (after) {
         qp.after = after;
       }
-      return graphGet(`/${accountId}/ads`, token, qp);
+      const adsResult = (await graphGet(`/${accountId}/ads`, token, qp)) as {
+        data?: Array<Record<string, unknown>>;
+        paging?: unknown;
+      };
+      const ads = Array.isArray(adsResult?.data) ? adsResult.data : [];
+      const creativeIds = Array.from(
+        new Set(
+          ads
+            .map((ad) => {
+              const creative = ad.creative;
+              if (!creative || typeof creative !== "object") {
+                return null;
+              }
+              const creativeId = (creative as { id?: unknown }).id;
+              return typeof creativeId === "string" ? creativeId : null;
+            })
+            .filter((id): id is string => Boolean(id)),
+        ),
+      );
+
+      if (creativeIds.length === 0) {
+        return adsResult;
+      }
+
+      const creativeEntries = await Promise.all(
+        creativeIds.map(async (creativeId) => {
+          const creative = await graphGet(`/${creativeId}`, token, {
+            fields:
+              "id,name,title,body,image_url,thumbnail_url,object_story_spec,call_to_action_type",
+          });
+          return [creativeId, creative] as const;
+        }),
+      );
+      const creativesById = new Map(creativeEntries);
+
+      return {
+        ...adsResult,
+        data: ads.map((ad) => {
+          const creative = ad.creative;
+          if (!creative || typeof creative !== "object") {
+            return ad;
+          }
+          const rawCreativeId = (creative as { id?: unknown }).id;
+          const creativeId = typeof rawCreativeId === "string" ? rawCreativeId : "";
+          if (!creativeId) {
+            return ad;
+          }
+          return {
+            ...ad,
+            creative: creativesById.get(creativeId) ?? creative,
+          };
+        }),
+      };
     }
 
     case "get-creatives": {
