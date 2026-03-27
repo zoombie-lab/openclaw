@@ -73,6 +73,7 @@ import {
 } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isAbortError } from "../abort.js";
+import { applyBeforeAgentStartResult } from "../before-agent-start.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
@@ -972,8 +973,15 @@ export async function runEmbeddedAttempt(
                 messageProvider: params.messageProvider ?? undefined,
               },
             );
+            const beforeAgentStart = applyBeforeAgentStartResult({
+              prompt: params.prompt,
+              hookResult,
+            });
+            effectivePrompt = beforeAgentStart.effectivePrompt;
+            if (beforeAgentStart.promptError) {
+              promptError = beforeAgentStart.promptError;
+            }
             if (hookResult?.prependContext) {
-              effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
               log.debug(
                 `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
               );
@@ -988,6 +996,10 @@ export async function runEmbeddedAttempt(
           prompt: effectivePrompt,
           messages: activeSession.messages,
         });
+
+        if (promptError) {
+          throw promptError;
+        }
 
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
         const leafEntry = sessionManager.getLeafEntry();

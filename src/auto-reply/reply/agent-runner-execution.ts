@@ -10,6 +10,7 @@ import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { isOpenClawPreflightError } from "../../agents/openclaw-preflight-error.js";
 import {
   isCompactionFailureError,
   isContextOverflowError,
@@ -511,6 +512,15 @@ export async function runAgentTurnWithFallback(params: {
       break;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (isOpenClawPreflightError(err)) {
+        defaultRuntime.log(`OpenClaw preflight denied run before reply: ${message}`);
+        return {
+          kind: "final",
+          payload: {
+            text: message,
+          },
+        };
+      }
       const isContextOverflow = isLikelyContextOverflowError(message);
       const isCompactionFailure = isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);

@@ -177,8 +177,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run before_agent_start hook.
-   * Allows plugins to inject context into the system prompt.
-   * Runs sequentially, merging systemPrompt and prependContext from all handlers.
+   * Allows plugins to inject context into the system prompt or cancel the run.
+   * Runs sequentially, merging handler results in priority order.
    */
   async function runBeforeAgentStart(
     event: PluginHookBeforeAgentStartEvent,
@@ -190,6 +190,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       ctx,
       (acc, next) => ({
         systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+        cancel: next.cancel ?? acc?.cancel,
+        error: next.error ?? acc?.error,
         prependContext:
           acc?.prependContext && next.prependContext
             ? `${acc.prependContext}\n\n${next.prependContext}`

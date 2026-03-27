@@ -3,7 +3,7 @@ import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createMetaAdsTool } from "../custom/tools/meta-ads-tool.js";
 import { createNotionTool } from "../custom/tools/notion-tool.js";
-import { createShopifyOpsTool } from "../custom/tools/shopify-ops-actions.js";
+import { createShopifyOpsTools } from "../custom/tools/shopify-ops-actions.js";
 import { createSlackTool } from "../custom/tools/slack-tool.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -176,7 +176,7 @@ export function createOpenClawTools(options?: {
           }),
         ]
       : []),
-    createShopifyOpsTool(),
+    ...createShopifyOpsTools(),
     createNotionTool(),
     createMetaAdsTool(),
   ];

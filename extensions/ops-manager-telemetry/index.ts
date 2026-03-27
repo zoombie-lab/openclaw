@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import { runOpenClawPreflight } from "./src/preflight.js";
 import {
   createOpsManagerTelemetryService,
   createOpsManagerTelemetryUsageAccumulator,
@@ -12,6 +13,11 @@ const plugin = {
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     const usageAccumulator = createOpsManagerTelemetryUsageAccumulator();
+    api.on("before_agent_start", async () => {
+      return await runOpenClawPreflight({
+        logger: api.logger,
+      });
+    });
     api.on("tool_result_persist", (event, ctx) => {
       usageAccumulator.recordToolResultUsage(event, ctx);
     });

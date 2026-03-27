@@ -328,6 +328,8 @@ export type PluginHookBeforeAgentStartEvent = {
 export type PluginHookBeforeAgentStartResult = {
   systemPrompt?: string;
   prependContext?: string;
+  cancel?: boolean;
+  error?: string;
 };
 
 // agent_end hook

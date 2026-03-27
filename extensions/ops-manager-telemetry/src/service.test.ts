@@ -94,7 +94,7 @@ describe("ops-manager telemetry service", () => {
     expect(payload).toMatchObject({
       agentId: "freddy",
       sessionKey: "agent:freddy:session-123",
-      origin: "slack",
+      origin: "openclaw",
       provider: "vercel-ai-gateway",
       model: "openai/gpt-5.4",
       usage: {

@@ -45,6 +45,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "message",
     "slack",
     "shopify_ops",
+    "shopify_ops_lookup",
     "gateway",
     "agents_list",
     "sessions_list",

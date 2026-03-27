@@ -4,36 +4,83 @@ import crypto from "node:crypto";
 import { stringEnum } from "../../agents/schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "../../agents/tools/common.js";
 
-const SHOPIFY_OPS_ACTIONS = [
+// ── Action groups ──────────────────────────────────────────────────────────
+
+const DATE_RANGE_ACTIONS = [
   "sales-analytics",
-  "search-orders",
-  "inventory-analytics",
-  "product-inventory",
   "fulfillment-velocity",
+  "chatbot-metrics",
+  "chatbot-escalation-metrics",
+] as const;
+
+const NON_DATE_ACTIONS = [
+  "inventory-analytics",
+  "search-orders",
+  "product-inventory",
   "order-timeline",
   "refunds-metrics",
   "returns-metrics",
-  "chatbot-metrics",
   "ops-snapshot",
 ] as const;
 
-const ShopifyOpsToolSchema = Type.Object(
+// Combined list for runtime validation.
+const SHOPIFY_OPS_ACTIONS = [...DATE_RANGE_ACTIONS, ...NON_DATE_ACTIONS] as const;
+
+// ── Schemas ────────────────────────────────────────────────────────────────
+
+const DateRangeSchema = Type.Object(
   {
-    action: stringEnum(SHOPIFY_OPS_ACTIONS),
+    action: stringEnum(DATE_RANGE_ACTIONS, {
+      description: "The analytics action to run.",
+    }),
+    startDate: Type.String({
+      description: "Start of the query window (YYYY-MM-DD).",
+    }),
+    endDate: Type.String({
+      description: "End of the query window (YYYY-MM-DD).",
+    }),
+    compareWithPreviousPeriod: Type.Optional(
+      Type.Boolean({
+        description: "Compare with the previous period of equal length. Used with sales-analytics.",
+      }),
+    ),
   },
   { additionalProperties: true },
 );
 
+const NonDateSchema = Type.Object(
+  {
+    action: stringEnum(NON_DATE_ACTIONS, {
+      description: "The analytics action to run.",
+    }),
+    query: Type.Optional(
+      Type.String({
+        description:
+          'Shopify search query. Required for search-orders, e.g. "name:#1234" or "email:customer@example.com".',
+      }),
+    ),
+    windowsDays: Type.Optional(
+      Type.Array(Type.Integer({ minimum: 1 }), {
+        description:
+          "Array of day-window sizes, e.g. [14]. Required for refunds-metrics and returns-metrics.",
+      }),
+    ),
+  },
+  { additionalProperties: true },
+);
+
+// ── Shared helpers ─────────────────────────────────────────────────────────
+
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {
-    throw new Error(`${name} is required to call shopify_ops`);
+    throw new Error(`${name} is required to call shopify ops tools`);
   }
   return value;
 }
 
 function requireExplicitDateRange(
-  _action: "sales-analytics" | "chatbot-metrics" | "fulfillment-velocity",
+  _action: (typeof DATE_RANGE_ACTIONS)[number],
   params: Record<string, unknown>,
 ): void {
   readStringParam(params, "startDate", { required: true });
@@ -61,12 +108,16 @@ function validateShopifyOpsParams(
   switch (action) {
     case "sales-analytics":
     case "chatbot-metrics":
+    case "chatbot-escalation-metrics":
     case "fulfillment-velocity":
       requireExplicitDateRange(action, params);
       return;
     case "refunds-metrics":
     case "returns-metrics":
       requireExplicitWindowsDays(action, params);
+      return;
+    case "search-orders":
+      readStringParam(params, "query", { required: true });
       return;
     default:
       return;
@@ -123,16 +174,37 @@ export async function handleShopifyOpsAction(
   }
 }
 
-export function createShopifyOpsTool(): AnyAgentTool {
-  return {
-    label: "Shopify Ops",
-    name: "shopify_ops",
-    description:
-      "Fetch Shopify metrics from ops-manager via signed requests. Pass an action plus its parameters (sales-analytics, inventory-analytics, fulfillment-velocity, refunds-metrics, returns-metrics, chatbot-metrics, search-orders, product-inventory, order-timeline, ops-snapshot). sales-analytics, chatbot-metrics, and fulfillment-velocity require explicit startDate and endDate. refunds-metrics and returns-metrics require explicit windowsDays.",
-    parameters: ShopifyOpsToolSchema,
-    execute: async (_toolCallId, args) => {
-      const params = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-      return await handleShopifyOpsAction(params);
+// ── Executor (shared by both tools) ────────────────────────────────────────
+
+const execute = async (_toolCallId: string, args: unknown) => {
+  const params = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  return await handleShopifyOpsAction(params);
+};
+
+// ── Tool factories ─────────────────────────────────────────────────────────
+
+export function createShopifyOpsTools(): AnyAgentTool[] {
+  return [
+    {
+      label: "Shopify Ops",
+      name: "shopify_ops",
+      description:
+        "Fetch date-ranged Shopify metrics: sales-analytics, fulfillment-velocity, chatbot-metrics, chatbot-escalation-metrics. Requires startDate and endDate.",
+      parameters: DateRangeSchema,
+      execute,
     },
-  };
+    {
+      label: "Shopify Ops Lookup",
+      name: "shopify_ops_lookup",
+      description:
+        "Fetch Shopify metrics that do not need a date range: inventory-analytics, refunds-metrics, returns-metrics, search-orders, product-inventory, order-timeline, ops-snapshot. refunds-metrics and returns-metrics require windowsDays.",
+      parameters: NonDateSchema,
+      execute,
+    },
+  ];
+}
+
+/** @deprecated Use createShopifyOpsTools() which returns both tools. */
+export function createShopifyOpsTool(): AnyAgentTool {
+  return createShopifyOpsTools()[0];
 }

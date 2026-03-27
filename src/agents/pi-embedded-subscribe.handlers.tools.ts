@@ -184,7 +184,7 @@ function summarizeToolArgs(toolName: string, args: unknown): string | undefined 
       path: typeof argsRecord.path === "string" ? argsRecord.path : undefined,
       contentLen: text.length || undefined,
     };
-  } else if (toolName === "shopify_ops") {
+  } else if (toolName === "shopify_ops" || toolName === "shopify_ops_lookup") {
     summary = sanitizeValueForLog(argsRecord) as Record<string, unknown>;
   } else if (toolName === "sessions_spawn") {
     const task = typeof argsRecord.task === "string" ? argsRecord.task : "";

@@ -18,20 +18,6 @@ function normalizeBaseUrl(value?: string): string | null {
   return trimmed.replace(/\/+$/g, "");
 }
 
-function normalizeOrigin(value?: string): "slack" | "cron" | "web" | "unknown" {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "slack") {
-    return "slack";
-  }
-  if (normalized === "cron") {
-    return "cron";
-  }
-  if (normalized === "web") {
-    return "web";
-  }
-  return "unknown";
-}
-
 function asNonNegativeNumber(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return 0;
@@ -215,7 +201,7 @@ function buildUsagePayload(evt: DiagnosticUsageEvent, pendingToolUsage: PendingT
   return {
     agentId,
     sessionKey: evt.sessionKey?.trim() || undefined,
-    origin: normalizeOrigin(evt.channel),
+    origin: "openclaw" as const,
     provider,
     model,
     usage: {
