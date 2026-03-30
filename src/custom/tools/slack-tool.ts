@@ -25,7 +25,16 @@ type SlackToolOptions = {
   workspaceDir?: string;
 };
 
-const SLACK_TOOL_ACTIONS = ["read", "user-info", "download-file", "upload-file"] as const;
+const SLACK_TOOL_ACTIONS = [
+  "read",
+  "user-info",
+  "download-file",
+  "upload-file",
+  "schedule-message",
+  "table",
+  "canvas",
+  "remote-file-share",
+] as const;
 
 const SlackToolSchema = Type.Object({
   action: stringEnum(SLACK_TOOL_ACTIONS, { description: "Slack action to perform." }),
@@ -67,6 +76,45 @@ const SlackToolSchema = Type.Object({
   ),
   maxBytes: Type.Optional(
     Type.Number({ description: "Max bytes to download (defaults to Slack mediaMaxMb or 10MB)." }),
+  ),
+
+  // schedule-message
+  text: Type.Optional(Type.String({ description: "Message text for schedule-message." })),
+  postAt: Type.Optional(
+    Type.Number({
+      description:
+        "Unix timestamp (seconds) for when the message should be posted. Max 120 days in the future.",
+    }),
+  ),
+
+  // table — rows of data sent as a Block Kit table block via chat.postMessage
+  rows: Type.Optional(
+    Type.Array(Type.Array(Type.String()), {
+      description: "2-D array of cell strings. First row is the header. Max 100 rows, 20 columns.",
+    }),
+  ),
+  columnAligns: Type.Optional(
+    Type.Array(Type.Union([Type.Literal("left"), Type.Literal("center"), Type.Literal("right")]), {
+      description: 'Per-column alignment. Defaults to "left".',
+    }),
+  ),
+
+  // canvas — creates a Slack canvas with markdown content
+  title: Type.Optional(Type.String({ description: "Title for canvas or list." })),
+  markdown: Type.Optional(
+    Type.String({
+      description:
+        "Markdown content for canvas. Supports bold, italic, headings h1-h3, tables, code blocks, checklists, links, @mentions, bulleted/ordered lists, quotes.",
+    }),
+  ),
+
+  // remote-file-share — register + share an external file
+  externalId: Type.Optional(
+    Type.String({ description: "Unique ID for the remote file (your own GUID)." }),
+  ),
+  externalUrl: Type.Optional(Type.String({ description: "URL of the remote file." })),
+  previewImage: Type.Optional(
+    Type.String({ description: "Base64 PNG/JPG preview image (min 800x400). Optional." }),
   ),
 
   // upload-file
@@ -184,7 +232,15 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
     label: "Slack",
     name: "slack",
     description:
-      "Slack utilities for on-demand context fetch (read recent messages / thread replies) and file upload/download. Prefer using this when you need more Slack context than the mention/DM event provides.",
+      "Slack utilities: read messages, file upload/download, schedule messages, and rich presentation.\n" +
+      "Presentation actions — pick the right format for the content:\n" +
+      "- table: Inline tabular data for quick viewing (max 100 rows, 20 cols). Best for small result sets, snapshots, comparisons.\n" +
+      "- canvas: Rich documents with markdown — reports, summaries, supplier sheets with notes/links/images. Best default for anything longer than a table.\n" +
+      "- list: Operational items the merchant tracks and acts on (tasks, orders to review, restock queue). Rows are interactive — assignable, filterable, checkable.\n" +
+      "- remote-file-share: Share externally hosted docs with a custom preview image when native Slack rendering is weak.\n" +
+      "Scheduling:\n" +
+      "- schedule-message: For reminders, follow-ups, timed notifications — 'say X at time Y'.\n" +
+      "- Use cron instead when the task requires performing an action (fetching data, generating a report) — 'do X then report at time Y'.",
     parameters: SlackToolSchema,
     execute: async (_toolCallId, args): Promise<AgentToolResult<unknown>> => {
       const cfg = options?.config ?? loadConfig();
@@ -303,6 +359,158 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
           parsed.files?.[0]?.id ?? parsed.file?.id ?? parsed.files?.[0]?.name ?? parsed.file?.name;
 
         return jsonResult({ ok: true, fileId, channelId });
+      }
+
+      if (action === "schedule-message") {
+        const text = readStringParam(params, "text", { required: true });
+        const postAt = readNumberParam(params, "postAt", { required: true });
+        const explicitChannelId = readStringParam(params, "channelId");
+        const channelId = explicitChannelId ?? options?.currentChannelId ?? undefined;
+        if (!channelId) {
+          throw new Error(
+            'Missing "channelId" for schedule-message (defaults only when invoked from Slack).',
+          );
+        }
+        const threadTs =
+          readStringParam(params, "threadTs") ??
+          (explicitChannelId ? undefined : (options?.currentThreadTs ?? undefined));
+
+        const { token } = resolveSlackTokenAndAccountId({ cfg, accountId });
+        const client = createSlackWebClient(token);
+        const res = await client.chat.scheduleMessage({
+          channel: channelId,
+          text,
+          post_at: postAt,
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        });
+        return jsonResult({
+          ok: true,
+          scheduledMessageId: res.scheduled_message_id,
+          channel: res.channel,
+          postAt: res.post_at,
+        });
+      }
+
+      // ── table ─────────────────────────────────────────────────────────
+      if (action === "table") {
+        const rows = params.rows as string[][] | undefined;
+        if (!rows || !Array.isArray(rows) || rows.length < 2) {
+          throw new Error(
+            '"rows" must be a 2-D array with at least a header row and one data row.',
+          );
+        }
+        if (rows.length > 100) {
+          throw new Error("Table block supports a maximum of 100 rows.");
+        }
+        const columnCount = rows[0]!.length;
+        if (columnCount > 20) {
+          throw new Error("Table block supports a maximum of 20 columns.");
+        }
+        const aligns = (params.columnAligns as string[] | undefined) ?? [];
+        const columnSettings = Array.from({ length: columnCount }, (_, i) => ({
+          align: (aligns[i] as "left" | "center" | "right") ?? "left",
+          is_wrapped: true,
+        }));
+        const tableRows = rows.map((row) => ({
+          cells: row.slice(0, 20).map((cell) => ({
+            type: "raw_text" as const,
+            text: String(cell ?? ""),
+          })),
+        }));
+        const explicitChannelId = readStringParam(params, "channelId");
+        const channelId = explicitChannelId ?? options?.currentChannelId ?? undefined;
+        if (!channelId) {
+          throw new Error('Missing "channelId" for table (defaults only when invoked from Slack).');
+        }
+        const threadTs =
+          readStringParam(params, "threadTs") ??
+          (explicitChannelId ? undefined : (options?.currentThreadTs ?? undefined));
+        const caption = readStringParam(params, "caption")?.trim() || undefined;
+
+        const { token } = resolveSlackTokenAndAccountId({ cfg, accountId });
+        const client = createSlackWebClient(token);
+        const res = await client.chat.postMessage({
+          channel: channelId,
+          text: caption ?? "Table",
+          blocks: [
+            {
+              type: "table",
+              rows: tableRows,
+              column_settings: columnSettings,
+            } as any,
+          ],
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        });
+        return jsonResult({ ok: true, ts: res.ts, channel: res.channel });
+      }
+
+      // ── canvas ────────��────────────────────────────────────────���──────
+      if (action === "canvas") {
+        const markdownContent = readStringParam(params, "markdown", { required: true });
+        const title = readStringParam(params, "title") ?? undefined;
+        const explicitChannelId = readStringParam(params, "channelId");
+        const channelId = explicitChannelId ?? options?.currentChannelId ?? undefined;
+
+        const { token } = resolveSlackTokenAndAccountId({ cfg, accountId });
+        const client = createSlackWebClient(token);
+
+        // If a channel is provided, create the canvas as a channel tab.
+        // Otherwise create a standalone canvas.
+        if (channelId) {
+          const res = await client.conversations.canvases.create({
+            channel_id: channelId,
+            title,
+            document_content: { type: "markdown", markdown: markdownContent },
+          });
+          return jsonResult({ ok: true, canvasId: (res as any).canvas_id });
+        }
+        const res = await client.canvases.create({
+          title,
+          document_content: { type: "markdown", markdown: markdownContent },
+        });
+        return jsonResult({ ok: true, canvasId: (res as any).canvas_id });
+      }
+
+      // ── remote-file-share ────────────────────────────��────────────────
+      if (action === "remote-file-share") {
+        const externalId = readStringParam(params, "externalId", { required: true });
+        const externalUrl = readStringParam(params, "externalUrl", { required: true });
+        const title =
+          readStringParam(params, "title") ?? readStringParam(params, "filename") ?? "Shared file";
+        const explicitChannelId = readStringParam(params, "channelId");
+        const channelId = explicitChannelId ?? options?.currentChannelId ?? undefined;
+        if (!channelId) {
+          throw new Error(
+            'Missing "channelId" for remote-file-share (defaults only when invoked from Slack).',
+          );
+        }
+
+        const { token } = resolveSlackTokenAndAccountId({ cfg, accountId });
+        const client = createSlackWebClient(token);
+
+        // Register the remote file (upsert by external_id)
+        const addArgs: Record<string, unknown> = {
+          external_id: externalId,
+          external_url: externalUrl,
+          title,
+        };
+        const previewB64 = readStringParam(params, "previewImage", { trim: false });
+        if (previewB64) {
+          const { base64 } = normalizeBase64Payload(previewB64);
+          if (base64) {
+            addArgs.preview_image = Buffer.from(base64, "base64");
+          }
+        }
+        const addRes = await client.files.remote.add(addArgs as any);
+        const fileId = (addRes as any).file?.id;
+
+        // Share into channel
+        await client.files.remote.share({
+          channels: channelId,
+          ...(fileId ? { file: fileId } : { external_id: externalId }),
+        });
+
+        return jsonResult({ ok: true, fileId, externalId, channelId });
       }
 
       throw new Error(`Unsupported slack action: ${action}`);
