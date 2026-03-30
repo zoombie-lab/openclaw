@@ -12,32 +12,132 @@ import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-// NOTE: We use Type.Object({}, { additionalProperties: true }) for job/patch
-// instead of CronAddParamsSchema/CronJobPatchSchema because the gateway schemas
-// contain nested unions. Tool schemas need to stay provider-friendly, so we
-// accept "any object" here and validate at runtime.
+// NOTE: Keep the top-level tool schema as a flat object because some providers
+// reject root-level anyOf/oneOf schemas. Nested objects stay provider-friendly
+// by using a discriminator field (`kind`) plus optional action-specific fields.
 
 const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
 
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
+const CRON_SESSION_TARGETS = ["main", "isolated"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
+const CRON_DELIVERY_MODES = ["none", "announce"] as const;
 
 const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
-// Flattened schema: runtime validates per-action requirements.
+const CronScheduleInputSchema = Type.Object(
+  {
+    kind: stringEnum(CRON_SCHEDULE_KINDS),
+    at: Type.Optional(
+      Type.String({
+        description: 'Required when kind="at". Absolute ISO-8601 timestamp.',
+      }),
+    ),
+    everyMs: Type.Optional(
+      Type.Number({
+        description: 'Required when kind="every". Interval in milliseconds.',
+      }),
+    ),
+    anchorMs: Type.Optional(
+      Type.Number({
+        description: 'Optional when kind="every". Start anchor in epoch milliseconds.',
+      }),
+    ),
+    expr: Type.Optional(
+      Type.String({
+        description: 'Required when kind="cron". Cron expression.',
+      }),
+    ),
+    tz: Type.Optional(
+      Type.String({
+        description: 'Optional timezone for kind="cron" schedules, for example Australia/Sydney.',
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const CronPayloadInputSchema = Type.Object(
+  {
+    kind: stringEnum(CRON_PAYLOAD_KINDS),
+    text: Type.Optional(
+      Type.String({
+        description: 'Required when kind="systemEvent". Reminder/system text to inject.',
+      }),
+    ),
+    message: Type.Optional(
+      Type.String({
+        description: 'Required when kind="agentTurn". Prompt for the isolated cron run.',
+      }),
+    ),
+    model: Type.Optional(Type.String()),
+    thinking: Type.Optional(Type.String()),
+    timeoutSeconds: Type.Optional(Type.Number()),
+    allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+const CronDeliveryInputSchema = Type.Object(
+  {
+    mode: Type.Optional(stringEnum(CRON_DELIVERY_MODES)),
+    channel: Type.Optional(Type.String()),
+    to: Type.Optional(Type.String()),
+    bestEffort: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+const CronJobInputSchema = Type.Object(
+  {
+    name: Type.String({
+      description: "Required human-readable name for the job.",
+    }),
+    schedule: CronScheduleInputSchema,
+    payload: CronPayloadInputSchema,
+    sessionTarget: stringEnum(CRON_SESSION_TARGETS),
+    wakeMode: Type.Optional(stringEnum(CRON_WAKE_MODES)),
+    delivery: Type.Optional(CronDeliveryInputSchema),
+    enabled: Type.Optional(Type.Boolean()),
+    deleteAfterRun: Type.Optional(Type.Boolean()),
+    description: Type.Optional(Type.String()),
+    agentId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const CronPatchInputSchema = Type.Object(
+  {
+    name: Type.Optional(Type.String()),
+    schedule: Type.Optional(CronScheduleInputSchema),
+    payload: Type.Optional(CronPayloadInputSchema),
+    sessionTarget: Type.Optional(stringEnum(CRON_SESSION_TARGETS)),
+    wakeMode: Type.Optional(stringEnum(CRON_WAKE_MODES)),
+    delivery: Type.Optional(CronDeliveryInputSchema),
+    enabled: Type.Optional(Type.Boolean()),
+    deleteAfterRun: Type.Optional(Type.Boolean()),
+    description: Type.Optional(Type.String()),
+    agentId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+// Flattened top-level schema: runtime still validates per-action requirements.
 const CronToolSchema = Type.Object({
   action: stringEnum(CRON_ACTIONS),
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
   includeDisabled: Type.Optional(Type.Boolean()),
-  job: Type.Optional(Type.Object({}, { additionalProperties: true })),
+  job: Type.Optional(CronJobInputSchema),
   jobId: Type.Optional(Type.String()),
   id: Type.Optional(Type.String()),
-  patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+  patch: Type.Optional(CronPatchInputSchema),
   text: Type.Optional(Type.String()),
   mode: optionalStringEnum(CRON_WAKE_MODES),
   runMode: optionalStringEnum(CRON_RUN_MODES),
@@ -73,6 +173,13 @@ function truncateText(input: string, maxLen: number) {
 
 function normalizeContextText(raw: string) {
   return raw.replace(/\s+/g, " ").trim();
+}
+
+function buildCronAddShapeError() {
+  return [
+    "cron.add requires `job.name`, `job.schedule`, `job.sessionTarget`, and `job.payload`.",
+    'Example: {"action":"add","job":{"name":"Reminder","schedule":{"kind":"at","at":"2026-03-30T16:52:00+11:00"},"sessionTarget":"main","payload":{"kind":"systemEvent","text":"Reminder: wake up piggieeee"}}}',
+  ].join(" ");
 }
 
 function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
@@ -348,7 +455,7 @@ ACTIONS:
 
 JOB SCHEMA (for add action):
 {
-  "name": "string (optional)",
+  "name": "string (required)",
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
   "delivery": { ... },      // Optional: announce summary (isolated only)
@@ -459,10 +566,20 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
 
           if (!params.job || typeof params.job !== "object") {
-            throw new Error("job required");
+            throw new Error(buildCronAddShapeError());
           }
           const explicitMain = hasExplicitMainSessionTarget(params);
           const job = normalizeCronJobCreate(params.job) ?? params.job;
+          if (
+            !isRecord(job) ||
+            typeof job.name !== "string" ||
+            !job.name.trim() ||
+            !isRecord(job.schedule) ||
+            typeof job.sessionTarget !== "string" ||
+            !isRecord(job.payload)
+          ) {
+            throw new Error(buildCronAddShapeError());
+          }
           if (job && typeof job === "object" && !("agentId" in job)) {
             const cfg = loadConfig();
             const agentId = opts?.agentSessionKey

@@ -122,7 +122,7 @@ function buildMessagingSection(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
-          "- For `action=send`, include `to` and `message`.",
+          "- For `action=send`, include `target` and `message`.",
           params.availableTools.has("files")
             ? "- Do not use `message` to create, download, or stage files. Use `files` first, then send the saved path with `media`, `path`, or `filePath`."
             : "",
@@ -261,7 +261,7 @@ export function buildAgentSystemPrompt(params: {
       "Canonical workspace file tool for saving and finding local files, CSV/JSON/text exports, base64/data URLs, local file copies, and URL downloads. Reuse the saved local path with message or image_generate.",
     image_generate:
       "Generate or edit images with AI. Reference images can be local paths, file:// URLs, data URLs, or http(s) URLs when unsandboxed. Stage local copies with files when needed.",
-    cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+    cron: "Manage cron jobs and wake events for deferred work. Use cron when the task should execute later (fetch data, generate a report, run a workflow) and then report back.",
     message:
       "Send messages and channel actions. Use files first for file creation/download/staging, then send the saved path here.",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
@@ -428,7 +428,8 @@ export function buildAgentSystemPrompt(params: {
           "- browser: control OpenClaw's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
-          "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+          "- slack.schedule-message: use for simple reminders, follow-ups, and timed notifications ('say X at time Y')",
+          "- cron: manage cron jobs and wake events for deferred work ('do X then report at time Y')",
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",

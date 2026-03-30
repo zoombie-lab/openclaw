@@ -23,6 +23,18 @@ describe("extractMessagingToolSend", () => {
     expect(result?.to).toBe("telegram:123");
   });
 
+  it("accepts target for message tool sends", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      channel: "telegram",
+      target: "123",
+    });
+
+    expect(result?.tool).toBe("message");
+    expect(result?.provider).toBe("telegram");
+    expect(result?.to).toBe("telegram:123");
+  });
+
   it("prefers provider when both provider and channel are set", () => {
     const result = extractMessagingToolSend("message", {
       action: "send",

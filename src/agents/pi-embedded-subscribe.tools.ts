@@ -176,8 +176,13 @@ export function extractMessagingToolSend(
     if (action !== "send" && action !== "thread-reply") {
       return undefined;
     }
-    const toRaw = typeof args.to === "string" ? args.to : undefined;
-    if (!toRaw) {
+    const targetRaw =
+      typeof args.target === "string"
+        ? args.target
+        : typeof args.to === "string"
+          ? args.to
+          : undefined;
+    if (!targetRaw) {
       return undefined;
     }
     const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
@@ -185,7 +190,7 @@ export function extractMessagingToolSend(
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : "message");
-    const to = normalizeTargetForProvider(provider, toRaw);
+    const to = normalizeTargetForProvider(provider, targetRaw);
     return to ? { tool: toolName, provider, accountId, to } : undefined;
   }
   const providerId = normalizeChannelId(toolName);
