@@ -364,6 +364,9 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
       if (action === "schedule-message") {
         const text = readStringParam(params, "text", { required: true });
         const postAt = readNumberParam(params, "postAt", { required: true });
+        if (postAt == null) {
+          throw new Error('"postAt" is required for schedule-message.');
+        }
         const explicitChannelId = readStringParam(params, "channelId");
         const channelId = explicitChannelId ?? options?.currentChannelId ?? undefined;
         if (!channelId) {
