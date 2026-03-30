@@ -186,18 +186,18 @@ const execute = async (_toolCallId: string, args: unknown) => {
 export function createShopifyOpsTools(): AnyAgentTool[] {
   return [
     {
-      label: "Shopify Ops",
-      name: "shopify_ops",
+      label: "Store Analytics",
+      name: "store_analytics",
       description:
-        "Fetch date-ranged Shopify metrics: sales-analytics, fulfillment-velocity, chatbot-metrics, chatbot-escalation-metrics. Requires startDate and endDate.",
+        "Fetch date-ranged Shopify performance metrics: sales-analytics, fulfillment-velocity, chatbot-metrics, chatbot-escalation-metrics. Requires startDate and endDate.",
       parameters: DateRangeSchema,
       execute,
     },
     {
-      label: "Shopify Ops Lookup",
-      name: "shopify_ops_lookup",
+      label: "Store Status",
+      name: "store_status",
       description:
-        "Fetch Shopify metrics that do not need a date range: inventory-analytics, refunds-metrics, returns-metrics, search-orders, product-inventory, order-timeline, ops-snapshot. refunds-metrics and returns-metrics require windowsDays.",
+        "Fetch current Shopify store state and lookups that do not need a date range: inventory-analytics, refunds-metrics, returns-metrics, search-orders, product-inventory, order-timeline, ops-snapshot. refunds-metrics and returns-metrics require windowsDays.",
       parameters: NonDateSchema,
       execute,
     },
