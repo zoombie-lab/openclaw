@@ -18,6 +18,8 @@ const NON_DATE_ACTIONS = [
   "search-orders",
   "product-inventory",
   "order-timeline",
+  "refund-and-return-worker",
+  "refund-and-return-export",
   "refunds-metrics",
   "returns-metrics",
   "ops-snapshot",
@@ -65,6 +67,37 @@ const NonDateSchema = Type.Object(
           "Array of day-window sizes, e.g. [14]. Required for refunds-metrics and returns-metrics.",
       }),
     ),
+    task: Type.Optional(
+      Type.String({
+        description:
+          "Natural-language task or question for the combined refund and return worker/export actions.",
+      }),
+    ),
+    topNRecurringSkus: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 500,
+        description:
+          "Optional cap for how many recurring-return SKUs to include in combined refund and return results.",
+      }),
+    ),
+    windowStartUtc: Type.Optional(
+      Type.String({
+        description:
+          "Optional ISO timestamp (UTC) for the report window start. Must be paired with windowEndUtc.",
+      }),
+    ),
+    windowEndUtc: Type.Optional(
+      Type.String({
+        description:
+          "Optional ISO timestamp (UTC) for the report window end. Must be paired with windowStartUtc.",
+      }),
+    ),
+    format: Type.Optional(
+      stringEnum(["json", "markdown"], {
+        description: "Export format for refund-and-return-export.",
+      }),
+    ),
   },
   { additionalProperties: true },
 );
@@ -101,6 +134,20 @@ function requireExplicitWindowsDays(
   }
 }
 
+function requirePairedUtcWindow(
+  action: "refund-and-return-worker" | "refund-and-return-export",
+  params: Record<string, unknown>,
+): void {
+  const hasStart =
+    typeof params.windowStartUtc === "string" && params.windowStartUtc.trim().length > 0;
+  const hasEnd = typeof params.windowEndUtc === "string" && params.windowEndUtc.trim().length > 0;
+  if (hasStart !== hasEnd) {
+    throw new Error(
+      `${action} requires windowStartUtc and windowEndUtc together when using an explicit window`,
+    );
+  }
+}
+
 function validateShopifyOpsParams(
   action: (typeof SHOPIFY_OPS_ACTIONS)[number],
   params: Record<string, unknown>,
@@ -115,6 +162,10 @@ function validateShopifyOpsParams(
     case "refunds-metrics":
     case "returns-metrics":
       requireExplicitWindowsDays(action, params);
+      return;
+    case "refund-and-return-worker":
+    case "refund-and-return-export":
+      requirePairedUtcWindow(action, params);
       return;
     case "search-orders":
       readStringParam(params, "query", { required: true });
@@ -197,7 +248,7 @@ export function createShopifyOpsTools(): AnyAgentTool[] {
       label: "Store Status",
       name: "store_status",
       description:
-        "Fetch current Shopify store state and lookups that do not need a date range: inventory-analytics, refunds-metrics, returns-metrics, search-orders, product-inventory, order-timeline, ops-snapshot. refunds-metrics and returns-metrics require windowsDays.",
+        "Fetch current Shopify store state and non-date lookups: inventory-analytics, refund-and-return-worker, refund-and-return-export, refunds-metrics, returns-metrics, search-orders, product-inventory, order-timeline, ops-snapshot. refunds-metrics and returns-metrics require windowsDays; combined refund-and-return actions optionally accept task, topNRecurringSkus, and paired UTC window timestamps.",
       parameters: NonDateSchema,
       execute,
     },
