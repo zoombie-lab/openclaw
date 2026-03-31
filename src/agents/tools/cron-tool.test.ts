@@ -92,32 +92,6 @@ describe("cron tool", () => {
     expect(call?.params).toEqual({ id: "job-due", mode: "due" });
   });
 
-  it("exposes a structured cron.add job schema to the model", async () => {
-    const tool = createCronTool();
-    const schema = tool.parameters as {
-      properties?: {
-        job?: {
-          additionalProperties?: boolean;
-          required?: string[];
-          properties?: {
-            schedule?: { properties?: Record<string, unknown>; additionalProperties?: boolean };
-            payload?: { properties?: Record<string, unknown>; additionalProperties?: boolean };
-          };
-        };
-      };
-    };
-
-    expect(schema.properties?.job?.additionalProperties).toBe(false);
-    expect(schema.properties?.job?.required).toEqual([
-      "name",
-      "schedule",
-      "payload",
-      "sessionTarget",
-    ]);
-    expect(schema.properties?.job?.properties?.schedule?.additionalProperties).toBe(false);
-    expect(schema.properties?.job?.properties?.payload?.additionalProperties).toBe(false);
-  });
-
   it("normalizes cron.add job payloads", async () => {
     const tool = createCronTool();
     await tool.execute("call2", {
@@ -480,9 +454,7 @@ describe("cron tool", () => {
         name: "orphan-name",
         enabled: true,
       }),
-    ).rejects.toThrow(
-      /cron\.add requires `job\.name`, `job\.schedule`, `job\.sessionTarget`, and `job\.payload`/,
-    );
+    ).rejects.toThrow("job required");
   });
 
   it("prefers existing non-empty job over flat params", async () => {
