@@ -20,8 +20,6 @@ const NON_DATE_ACTIONS = [
   "order-timeline",
   "refund-and-return-worker",
   "refund-and-return-export",
-  "refunds-metrics",
-  "returns-metrics",
   "ops-snapshot",
 ] as const;
 
@@ -59,12 +57,6 @@ const NonDateSchema = Type.Object(
       Type.String({
         description:
           'Shopify search query. Required for search-orders, e.g. "name:#1234" or "email:customer@example.com".',
-      }),
-    ),
-    windowsDays: Type.Optional(
-      Type.Array(Type.Integer({ minimum: 1 }), {
-        description:
-          "Array of day-window sizes, e.g. [14]. Required for refunds-metrics and returns-metrics.",
       }),
     ),
     task: Type.Optional(
@@ -120,20 +112,6 @@ function requireExplicitDateRange(
   readStringParam(params, "endDate", { required: true });
 }
 
-function requireExplicitWindowsDays(
-  action: "refunds-metrics" | "returns-metrics",
-  params: Record<string, unknown>,
-): void {
-  const windowsDays = params.windowsDays;
-  const isValid =
-    Array.isArray(windowsDays) &&
-    windowsDays.length > 0 &&
-    windowsDays.every((value) => Number.isInteger(value) && Number(value) > 0);
-  if (!isValid) {
-    throw new Error(`${action} requires windowsDays as a non-empty array of positive integers`);
-  }
-}
-
 function requirePairedUtcWindow(
   action: "refund-and-return-worker" | "refund-and-return-export",
   params: Record<string, unknown>,
@@ -158,10 +136,6 @@ function validateShopifyOpsParams(
     case "chatbot-escalation-metrics":
     case "fulfillment-velocity":
       requireExplicitDateRange(action, params);
-      return;
-    case "refunds-metrics":
-    case "returns-metrics":
-      requireExplicitWindowsDays(action, params);
       return;
     case "refund-and-return-worker":
     case "refund-and-return-export":
@@ -248,7 +222,7 @@ export function createShopifyOpsTools(): AnyAgentTool[] {
       label: "Store Status",
       name: "store_status",
       description:
-        "Fetch current Shopify store state and non-date lookups: inventory-analytics, refund-and-return-worker, refund-and-return-export, refunds-metrics, returns-metrics, search-orders, product-inventory, order-timeline, ops-snapshot. refunds-metrics and returns-metrics require windowsDays; combined refund-and-return actions optionally accept task, topNRecurringSkus, and paired UTC window timestamps.",
+        "Fetch current Shopify store state and non-date lookups: inventory-analytics, refund-and-return-worker, refund-and-return-export, search-orders, product-inventory, order-timeline, ops-snapshot. Combined refund-and-return actions optionally accept task, topNRecurringSkus, and paired UTC window timestamps.",
       parameters: NonDateSchema,
       execute,
     },
