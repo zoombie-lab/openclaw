@@ -33,12 +33,30 @@ const DateRangeSchema = Type.Object(
     action: stringEnum(DATE_RANGE_ACTIONS, {
       description: "The analytics action to run.",
     }),
-    startDate: Type.String({
-      description: "Start of the query window (YYYY-MM-DD).",
-    }),
-    endDate: Type.String({
-      description: "End of the query window (YYYY-MM-DD).",
-    }),
+    startDate: Type.Optional(
+      Type.String({
+        description:
+          "Optional shop-local start date (YYYY-MM-DD). Must be paired with endDate unless using windowStartUtc/windowEndUtc.",
+      }),
+    ),
+    endDate: Type.Optional(
+      Type.String({
+        description:
+          "Optional shop-local end date (YYYY-MM-DD). Must be paired with startDate unless using windowStartUtc/windowEndUtc.",
+      }),
+    ),
+    windowStartUtc: Type.Optional(
+      Type.String({
+        description:
+          "Optional ISO timestamp (UTC) for the exact report window start. Must be paired with windowEndUtc.",
+      }),
+    ),
+    windowEndUtc: Type.Optional(
+      Type.String({
+        description:
+          "Optional ISO timestamp (UTC) for the exact report window end. Must be paired with windowStartUtc.",
+      }),
+    ),
     compareWithPreviousPeriod: Type.Optional(
       Type.Boolean({
         description: "Compare with the previous period of equal length. Used with sales-analytics.",
@@ -108,8 +126,25 @@ function requireExplicitDateRange(
   _action: (typeof DATE_RANGE_ACTIONS)[number],
   params: Record<string, unknown>,
 ): void {
-  readStringParam(params, "startDate", { required: true });
-  readStringParam(params, "endDate", { required: true });
+  const hasStartDate = typeof params.startDate === "string" && params.startDate.trim().length > 0;
+  const hasEndDate = typeof params.endDate === "string" && params.endDate.trim().length > 0;
+  const hasWindowStart =
+    typeof params.windowStartUtc === "string" && params.windowStartUtc.trim().length > 0;
+  const hasWindowEnd =
+    typeof params.windowEndUtc === "string" && params.windowEndUtc.trim().length > 0;
+
+  if (hasWindowStart !== hasWindowEnd) {
+    throw new Error("windowStartUtc and windowEndUtc must be provided together");
+  }
+  if (hasStartDate !== hasEndDate) {
+    throw new Error("startDate and endDate must be provided together");
+  }
+  if ((hasStartDate || hasEndDate) && (hasWindowStart || hasWindowEnd)) {
+    throw new Error("Use either startDate/endDate or windowStartUtc/windowEndUtc, not both");
+  }
+  if (!hasStartDate && !hasWindowStart) {
+    throw new Error("Either startDate/endDate or windowStartUtc/windowEndUtc is required");
+  }
 }
 
 function requirePairedUtcWindow(
@@ -214,7 +249,7 @@ export function createShopifyOpsTools(): AnyAgentTool[] {
       label: "Store Analytics",
       name: "store_analytics",
       description:
-        "Fetch date-ranged Shopify performance metrics: sales-analytics, fulfillment-velocity, chatbot-metrics, chatbot-escalation-metrics. Requires startDate and endDate.",
+        "Fetch Shopify performance metrics: sales-analytics, fulfillment-velocity, chatbot-metrics, chatbot-escalation-metrics. Use startDate/endDate for shop-local calendar windows, or windowStartUtc/windowEndUtc for exact UTC intervals.",
       parameters: DateRangeSchema,
       execute,
     },
